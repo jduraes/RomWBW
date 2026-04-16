@@ -1,5 +1,5 @@
 ;------------------------------------------------------------------------------
-; SN76489 + AY-3-8910 + YM2162 + YM2151 VGM player for CP/M
+; SN76489 + AY-3-8910 + YM2162 + YM2151 + SAA1099 VGM player for CP/M
 ;------------------------------------------------------------------------------
 ;
 ; Based on VGM player by J.B. Langston
@@ -39,7 +39,7 @@ SC720		.equ	6			; Special build for the SC720 with YM2149 on Coleco ports
 ;
 plt_romwbw	.equ	1			; Build for ROMWBW?
 plt_type	.equ	SC720		; Select build configuration
-debug		.equ	1			; Display port, register, config info
+debug		.equ	0			; Display port, register, config info
 ;
 ;------------------------------------------------------------------------------
 ;------------------------------------------------------------------------------
@@ -229,6 +229,20 @@ YMSEL		.equ	000H		; UNDEFINED	; Primary YM2162 11000000 a1=0 a0=0
 #ENDIF
 ;
 ;------------------------------------------------------------------------------
+; SAA1099 board I/O ports.
+;------------------------------------------------------------------------------
+;
+saa_swapio	.equ	1			; 0=SEL FE/DAT FF, 1=SEL FF/DAT FE
+saa_amp_r2l	.equ	1			; 1=fold right-nibble amplitude into left nibble for regs 00h-05h
+#IF (saa_swapio)
+SAA1099_SEL1	.equ	0FFH
+SAA1099_DAT1	.equ	0FEH
+#ELSE
+SAA1099_SEL1	.equ	0FEH
+SAA1099_DAT1	.equ	0FFH
+#ENDIF
+;
+;------------------------------------------------------------------------------
 ; CTC Defaults 
 ;------------------------------------------------------------------------------
 ;
@@ -312,6 +326,7 @@ VGM_OPL31_W	.equ	05EH			; YMF262 (OPL3) PORT 0 WRITE VALUE DD
 VGM_OPL32_W	.equ	05FH			; YMF262 (OPL3) PORT 1 WRITE VALUE DD
 VGM_AY		.equ	0A0H			; AY-3-8910
 VGM_YM2413	.equ	051H			; YM2413, write value dd to register aa
+VGM_SAA1099_W	.equ	0BDH			; SAA1099, write value dd to register aa
 
 ;------------------------------------------------------------------------------
 ; Generic CP/M definitions
@@ -470,6 +485,8 @@ _S1             LD      DE, VGMDATA + 34H
 		LD      (vdelay), HL
 ;
 		LD	IX,VGM_DEV		; IX points to device mask
+				BIT	1,(IX+1)		; initialize SAA1099 if this VGM uses it
+				CALL	NZ,SAA_INIT_HW
 		ret
 ;
 ;------------------------------------------------------------------------------
@@ -698,7 +715,7 @@ YM2151_1	CP      VGM_YM21511_W
 		JP	NEXT
 ;
 YM2151_2	CP      VGM_YM21512_W
-                JR      NZ,GG
+                JR      NZ,SAA1099
 		LD	A,(HL)
 		OUT	(YM2151_SEL2),A
 		INC	HL
@@ -706,6 +723,65 @@ YM2151_2	CP      VGM_YM21512_W
 		OUT	(YM2151_DAT2),A
 		INC	HL
 		SET	7,(IX+0)
+		JP	NEXT
+;
+;	SAA1099 SECTION
+;
+SAA1099:	CP      VGM_SAA1099_W
+		JR	NZ,GG
+		BIT	4,(IX+1)		; one-time SAA hardware init on first SAA command
+		CALL	Z,SAA_INIT_HW
+		SET	4,(IX+1)
+		LD	A,(HL)			; register byte
+		BIT	7,A			; dual-SAA stream: skip chip #2 writes on single-chip hardware
+		JR	Z,SAA_DO_WRITE
+		INC	HL
+		INC	HL
+		JP	NEXT
+SAA_DO_WRITE:
+		PUSH	BC
+		PUSH	DE
+		LD	B,0
+		AND	1FH			; map CMS dual-chip encoded register IDs to local SAA reg range 00h-1Fh
+		LD	E,A
+		LD	C,SAA1099_SEL1
+		OUT	(C),A
+		NOP
+		NOP
+		INC	HL
+		LD	A,(HL)
+#IF (saa_amp_r2l)
+		LD	D,A
+		LD	A,E
+		CP	06H
+		JR	NC,SAA_NO_FOLD
+		LD	A,D
+		AND	0F0H
+		LD	E,A
+		LD	A,D
+		AND	0FH
+		LD	D,A
+		LD	A,E
+		RRCA
+		RRCA
+		RRCA
+		RRCA
+		AND	0FH
+		OR	D
+		OR	E
+		JR	SAA_NOW_FOLD
+SAA_NO_FOLD:
+		LD	A,D
+SAA_NOW_FOLD:
+#ENDIF
+		LD	C,SAA1099_DAT1
+		OUT	(C),A
+		NOP
+		NOP
+		POP	DE
+		POP	BC
+		INC	HL
+		SET	1,(IX+1)
 		JP	NEXT
 ;
 ;	GAME GEAR SN76489 STEREO SECTION
@@ -821,8 +897,18 @@ VGMDEVICES:	LD	DE,MSG_PO		; Played on ...
 	CALL	PRTSTR
 
 SKIPX:
+	LD	A,(IX+1)
+	BIT	1, A
+	JR	Z, SKIPY
+	SRL	A
+
+	LD	DE, MSG_SAA1099
+	CALL	CHKDEV1
+
+SKIPY:	LD	A,(IX+1)
+	AND	%00000001
 	LD	DE,MSG_UNK		; Unknown Device Code detected
-	CALL	CHKDEV
+	CALL	CHKDEV1
 ;
 CHKDEV:		AND	%00000011		; Display 
 		RET	Z			; number of
@@ -1356,6 +1442,64 @@ SKIP4		BIT	2,(IX+1)		; mute all channels on YM2413
 		jr	YM2413_FILL    ; key off
 
 SKIP5:
+		BIT	1,(IX+1)		; mute all channels on SAA1099
+		JP	Z,SKIP6
+		PUSH	DE
+		LD	B,20H
+		LD	D,00H
+SAA_MUTE:
+		LD	A,D
+		PUSH	BC
+		LD	B,0
+		LD	C,SAA1099_SEL1
+		OUT	(C),A
+		NOP
+		NOP
+		XOR	A
+		LD	C,SAA1099_DAT1
+		OUT	(C),A
+		POP	BC
+		INC	D
+		DJNZ	SAA_MUTE
+		LD	A,1CH
+		LD	B,0
+		LD	C,SAA1099_SEL1
+		OUT	(C),A
+		NOP
+		NOP
+		XOR	A			; 1C00: global disable
+		LD	C,SAA1099_DAT1
+		OUT	(C),A
+		POP	DE
+SKIP6:
+		RET
+
+SAA_INIT_HW:
+		PUSH	AF
+		PUSH	BC
+		LD	B,0
+		LD	A,1CH
+		LD	C,SAA1099_SEL1
+		OUT	(C),A
+		NOP
+		NOP
+		LD	A,02H			; sync/reset pulse before enabling output
+		LD	C,SAA1099_DAT1
+		OUT	(C),A
+		NOP
+		NOP
+		LD	A,1CH
+		LD	C,SAA1099_SEL1
+		OUT	(C),A
+		NOP
+		NOP
+		LD	A,01H			; global enable
+		LD	C,SAA1099_DAT1
+		OUT	(C),A
+		NOP
+		NOP
+		POP	BC
+		POP	AF
 		RET
 
 ; e = register
@@ -1441,7 +1585,7 @@ PRTIDXDEA3:
 ; Strings and constants.
 ;------------------------------------------------------------------------------
 ;
-MSG_WELC:	.DB	"VGM Player v0.5.12, 20-01-2026 - Timing tuned (88 BPM)"
+MSG_WELC:	.DB	"VGM Player v0.5.12b012, 16-04-2026 - Timing tuned (88 BPM)"
 ;		.DB	CR,LF, "J.B. Langston/Marco Maccaferri/Ed Brindley/Phil Summers",CR,LF
 		.DB	0
 MSG_BADF:	.DB	"Not a VGM file",CR,LF,0
@@ -1452,6 +1596,7 @@ MSG_AY:		.DB	"xAY-3-8910 ",0
 MSG_OPL3:	.DB	"xYM-3812 ",0
 MSG_YM2151:	.DB	"xYM-2151 ",0
 MSG_YM2413:	.DB	"YM2413", 0
+MSG_SAA1099:	.DB	"xSAA1099 ",0
 MSG_UNK:	.DB	"xUnsupported device encountered", CR, LF, 0
 MSG_EXIT:	.DB	CR, LF, "FINISHED.",CR,LF,0
 MSG_NOFILE:     .DB	"File not found", CR, LF, 0
@@ -1488,6 +1633,9 @@ VGM_DEV		.DB	%00000000	; IX+0 Flags for devices
 					; ......xx sn76489 1 & 2
 
 		.DB	%00000000	; IX+1 Unimplemented device flags & future devices
+					; ......1. saa1099
+					; .....1.. ym2413
+					; .......1 unknown vgm command
 fdelay0	.DB	12			; Base CPU-calibrated inner delay from CLKTBL
 fdelay		.DB	12			; Effective per-frame delay (may dither from fdelay0)
 fdith_pos	.DB	0			; Dither position [0..fdith_cycle-1]
