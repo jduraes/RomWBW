@@ -8,7 +8,7 @@
 ; (c)2026 Joao Miguel Duraes
 ; Licensed under the MIT License
 ;
-; Version: 1.2 - 16-Apr-2026
+; Version: 1.3 - 16-Apr-2026
 ;
 ; Assemble with:
 ;   TASM -80 -b vgminfo.asm vgminfo.com
@@ -42,9 +42,6 @@ LF              .equ    0AH                 ; line feed
 ;------------------------------------------------------------------------------
 
 DEBUG_SUM       .equ    1                   ; 1 = build with checksum support
-
-; Increment BUILD_NUM on every source change so we can confirm which binary is running.
-BUILD_NUM       .equ    0026H               ; debug build number (hex)
 
 ; Run modes
 MODE_SIMPLE     .equ    0                   ; v1.1-style table output
@@ -121,7 +118,6 @@ NOT_HELP:
 
                 LD      DE, MSG_S_HEADER1
                 CALL    PRTSTR
-                CALL    PRINT_BUILD
                 LD      DE, MSG_S_HEADER2
                 CALL    PRTSTR
                 LD      DE, MSG_S_DIVIDER
@@ -131,7 +127,6 @@ NOT_HELP:
 HDR_VERBOSE:
                 LD      DE, MSG_HEADER1
                 CALL    PRTSTR
-                CALL    PRINT_BUILD
                 LD      DE, MSG_HEADER2
                 CALL    PRTSTR
 
@@ -1026,14 +1021,6 @@ PRTHEX32_LE:    PUSH    HL
                 LD      A, E
                 CALL    PRTHEX8
                 POP     HL
-                RET
-
-;------------------------------------------------------------------------------
-; Print build number
-;------------------------------------------------------------------------------
-
-PRINT_BUILD:    LD      HL, BUILD_NUM
-                CALL    PRTHEX16
                 RET
 
 ;------------------------------------------------------------------------------
@@ -2305,7 +2292,7 @@ CRLF:           LD      A, CR
 ;------------------------------------------------------------------------------
 
 MSG_S_HEADER1:  .DB     CR, LF
-                .DB     "VGM Music Chip Scanner v1.2 b", 0
+                .DB     "VGM Music Chip Scanner v1.3", 0
 MSG_S_HEADER2:  .DB     " - 16-Apr-2026", CR, LF
                 .DB     "(c)2026 Joao Miguel Duraes - MIT License", CR, LF
                 .DB     CR, LF
@@ -2315,7 +2302,7 @@ MSG_S_DIVIDER:  .DB     "========  =====================", CR, LF
                 .DB     0
 
 MSG_HEADER1:    .DB     CR, LF
-                .DB     "VGMINFO v1.2 b", 0
+                .DB     "VGMINFO v1.3", 0
 
 MSG_HEADER2:    .DB     " - 16-Apr-2026", CR, LF
                 .DB     "(c)2026 Joao Miguel Duraes - MIT License", CR, LF
