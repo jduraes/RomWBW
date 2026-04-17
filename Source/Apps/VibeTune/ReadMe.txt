@@ -56,4 +56,4 @@ POSIX:
 Usage
 -----
 VTUNE <filename>.[PT2|PT3|MYM|VGM] [-msx|-rc|-coleco] [-delay] [--hbios]
-      [+tn|-tn] [-list] [-loop] [-config]
+  [+tn|-tn] [-list] [-loop] [-config] [-credits]

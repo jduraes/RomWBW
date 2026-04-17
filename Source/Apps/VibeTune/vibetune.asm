@@ -98,6 +98,16 @@ PORTS_MSX		.EQU	1		; force MSX audio chip ports
 PORTS_RC		.EQU	2		; force RCBUS audio chip ports
 PORTS_COLECO	.EQU	3		; force Coleco-style AY ports (50H/51H)
 
+; Shared key action identifiers (decoded by keyctl.inc helpers)
+KEYACT_NONE		.EQU	0
+KEYACT_ESC		.EQU	1
+KEYACT_LOOPTRK	.EQU	2
+KEYACT_LOOPPLY	.EQU	3
+KEYACT_REDRAW	.EQU	4
+KEYACT_PREV		.EQU	5
+KEYACT_NEXT		.EQU	6
+KEYACT_NAV		.EQU	7
+
 ; Shared terminal config (TERM.CFG) constants/aliases for termcfg.inc
 bdos			.EQU	BDOS
 dma_default	.EQU	$0080
@@ -150,6 +160,20 @@ Id				.EQU	1	; 5) Insert official identificator
 
 	.ORG	$0100
 ;
+	CALL	CLI_PREP
+	CALL	CLI_HAVE_CREDITS_SWITCH
+	LD	A,(CREDMD)
+	OR	A
+	JR	Z,STARTUP_BANNER
+	PRTCRLF
+	PRTSTRDE(MSGBAN)		; Print to banner message
+	CALL	CRLF
+	CALL	CRLF
+	PRTSTRDE(MSGCRED)
+	CALL	CRLF
+	JP	0
+
+STARTUP_BANNER:
 	PRTCRLF
 	PRTSTRDE(MSGBAN)		; Print to banner message
 	CALL	PRTCPUKHZBAN		; Print detected CPU speed in MHz
@@ -161,7 +185,6 @@ Id				.EQU	1	; 5) Insert official identificator
 	LD	A,(7)			; high byte of BDOS entry address
 	DEC	A			; stop one page below BDOS
 	LD	(HEAPENDB),A		; save as runtime load ceiling page
-	CALL	CLI_PREP
 	CALL	CLI_HAVE_ALL_SWITCH
 	CALL	CLI_HAVE_LOOP_SWITCH
 	CALL	CLI_HAVE_CONFIG_SWITCH
@@ -226,7 +249,7 @@ CONTINUE:
 	LD	HL,COLECOPORTS		; assume Coleco AY ports
 	CP	PORTS_COLECO		; use Coleco?
 	JR	Z,FORCE
-	JR	AUTOSEL				; otherwise do auto select
+	JP	AUTOSEL_IMPL		; otherwise do auto select
 
 FORCE:
 	LD	BC,CFGSIZ		; Size of one entry
@@ -234,49 +257,6 @@ FORCE:
 	LDIR				; Update active config structure
 	JR	MAT				; Continue
 
-AUTOSEL:
-	; Prefer HBIOS sound enumeration for auto selection. This avoids
-	; relying on PSG register readback behavior for detection.
-	CALL	HB_SND_AUTOCFG
-	JR	NZ,AUTOSEL_FBK
-	JR	MAT				; success: CFG populated, skip config table scan
-AUTOSEL_FBK:
-	LD	HL,CFGTBL		; Point to start of config table
-CFGSEL:
-	LD	A,$FF			; End of table marker
-	CP	(HL)			; Compare
-	JP	Z,ERRHW			; Bail out if no more configs to try
-;
-	LD	BC,CFGSIZ		; Size of one entry
-	LD	DE,CFG			; Active config structure
-	LDIR				; Update active config structure
-;
-	LD	A,(CURPLT)		; Get current running platform id
-	LD	E,A				; Put in E
-	LD	A,(PLT)			; Get platform id of loaded config
-	CP	E				; Equal?
-	JR	NZ,CFGSEL		; If no match keep trying
-;
-	; Activate card if applicable
-	LD	B,0			; ensure 8-bit port addressing via BC
-	LD	A,(ACR)		; Get ACR port address (if any)
-	LD	C,A			; Copy to C for I/O later
-	INC	A			; $FF -> $00 & set flags
-	JR	Z,PROBE		; If no ACR, skip ahead
-	CALL	SLOWIO	; Slow down I/O for the activation write
-	LD	A,(ACRVAL)	; Value to activate card
-	OUT	(C),A		; Write value to ACR
-	CALL	NORMIO	; Restore I/O speed
-;
-PROBE:
-	; Test for hardware (sound chip detection)
-	; Use PROBE_AY to avoid false positives from floating-bus echo behavior.
-	LD	HL,(PORTS)		; HL = RDAT:RSEL
-	LD	A,(RIN)			; A = RIN
-	CALL	PROBE_AY
-	JR	Z,MAT			; Hardware matched!
-	JR	CFGSEL			; Keep trying
-;
 MAT:
 	; Hardware matched!
 	;
@@ -456,6 +436,7 @@ _LD	LD	HL,(DMA)		; Get load address
 _LDX	LD	C,16			; CPM Close File function
 	LD	DE,FCB			; FCB
 	CALL	BDOS			; Do it
+	CALL	META_SNAPSHOT		; preserve title/artist for stable redraw
 ;
 	LD	A,(ALLMD)
 	OR	A
@@ -485,643 +466,10 @@ _LDX1:
 	JP	Z,goVGM			; If so, do it
 	JP	ERRNAM			; This should never happen
 
-GOPT2	LD	A,2			; SETUP value to PT2 sound files
-	LD	(START+10),A	; Save it
-	; Avg TS / quark for PT2 files has *not* been measured!!!
-	LD	DE,185			; Avg TS / quark = 7400, so 185 delay loops
-	JR	GOPTX			; Play PTx file
+#include "ptx_runtime.inc"
 
-GOPT3	LD	A,0			; SETUP value to PT3 sound files
-	LD	(START+10),A	; Save it
-	LD	DE,185			; Avg TS / quark = 7400, so 185 delay loops
-	JR	GOPTX			; Play PTx file
+#include "mym_runtime.inc"
 
-GOPTX
-	LD	HL,(QDLY)		; Get basic quark delay
-	OR	A				; Clear carry
-	SBC	HL,DE			; Adjust for file type
-	LD	(QDLY),HL		; Save updated quark delay factor
-
-	LD	A,(UI_ACTIVE)
-	OR	A
-	JR	NZ,GOPTXSP2
-	LD	A,(INFOLINE)	; spacing before song metadata
-	OR	A
-	JR	Z,GOPTXSP1
-	CALL	CRLF2
-	JR	GOPTXSP2
-GOPTXSP1:
-	CALL	CRLF
-GOPTXSP2:
-	CALL	PRTSONGMETA		; Print song metadata block
-;
-	; TurboSound-packed PT3 init
-	LD	A,(TSFLAG)
-	OR	A
-	JR	Z,PTXINITN
-	ISHBIOS
-	JR	Z,PTXINITT			; TurboSound requires direct I/O
-	ERRWITHMSG(MSGTSHB)
-PTXINITT:
-	CALL	TS_PORTS_SETUP	; probe and configure both chips
-	CALL	TS_ADJTIM		; adjust delay timing for TS
-	CALL	TS_INIT			; init both PT3 instances
-	JR	PTXSTART
-PTXINITN:
-	CALL	START			; Do initialization
-;
-PTXSTART:
-	LD	A,(ALLMD)
-	OR	A
-	JR	NZ,PTXSTARTF
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,PTXSTART0
-PTXSTARTF:
-	CALL	FLUSHKEYS
-PTXSTART0:
-	CALL	PRTPLAYMSG		; Playing message
-;
-PTXLP:	LD	A,(TSFLAG)
-	OR	A
-	JR	Z,PTXLP_NORM
-	CALL	TS_PLAYQUARK	; Play one quark on both chips
-	LD	A,(TSSET1)
-	BIT	7,A
-	JR	Z,PTXLP_KEY
-	LD	A,(TSSET2)
-	BIT	7,A
-	JP	NZ,EXIT				; done when both instances indicate loop point passed
-	JR	PTXLP_KEY
-PTXLP_NORM:
-	CALL	START+5		; Play one quark
-	LD	A,(START+10)	; Get setup byte
-	BIT	7,A				; Check bit 7 (loop point passed)
-	JP	NZ,EXIT			; Bail out when done playing
-PTXLP_KEY:
-	CALL	GETKEY		; Check for keypress
-	JP	Z,PTXLP_KEY1
-	LD	E,A			; save pressed key
-	LD	A,E
-	CP	' '
-	JP	Z,PTXLP_PAUSE_TOGGLE
-	CALL	PLAYLIST_DELSEQ_CHECK
-	CP	0
-	JR	Z,PTXLP_DEL3
-	CP	$FF
-	JP	Z,PTXLP_KEY1
-	LD	A,(ALLMD)
-	OR	A
-	JP	Z,PTXLP_ABRT		; non-playlist mode: any key aborts
-	LD	A,E
-	CALL	PLAYLIST_MAP_KEY
-	LD	E,A
-	CP	27			; ESC quits playlist
-	JP	Z,PTXLP_ESC
-	LD	A,E
-	CP	'l'
-	JP	Z,PTXLP_LOOP_TRACK
-	CP	'L'
-	JP	Z,PTXLP_LOOP_PLAY
-	AND	$DF
-	CP	'R'
-	JP	Z,PTXLP_SHOWQ
-	CP	'P'
-	JP	Z,PTXLP_PREV
-	CP	'N'
-	JP	Z,PTXLP_NEXT
-	CP	'A'
-	JP	Z,PTXLP_NAV
-	CP	'D'
-	JP	Z,PTXLP_NAV
-	CP	'W'
-	JP	Z,PTXLP_NAV
-	CP	'S'
-	JP	Z,PTXLP_NAV
-	JP	PTXLP_KEY1
-PTXLP_DEL3:
-	LD	A,(ALLMD)
-	OR	A
-	JP	Z,PTXLP_KEY1
-	CALL	PLAYLIST_CONFIRM_DELETE
-	OR	A
-	JP	Z,PTXLP_KEY1
-	CALL	PLAYLIST_DELETE_SELECTED
-	OR	A
-	JP	Z,PTXLP_KEY1
-	JP	EXIT
-PTXLP_NAV:
-	CALL	PLAYLIST_MOVE_WASD
-	JP	Z,PTXLP_KEY1
-	LD	A,$FF
-	LD	(NAVREQ),A
-	JP	EXIT
-PTXLP_NEXT:
-	LD	A,$FF
-	LD	(SKIPREQ),A
-	JP	EXIT
-PTXLP_PAUSE_TOGGLE:
-	LD	A,(PAUSEMD)
-	OR	A
-	JR	Z,PTXLP_PAUSE_ON
-	XOR	A
-	LD	(PAUSEMD),A
-	JP	PTXLP_KEY1
-PTXLP_PAUSE_ON:
-	LD	A,$FF
-	LD	(PAUSEMD),A
-	CALL	MUTE_NOW
-	CALL	PRTPAUSEMSG
-PTXLP_PAUSE_WAIT:
-	CALL	GETKEY
-	JP	Z,PTXLP_PAUSE_WAIT1
-	CP	' '
-	JR	Z,PTXLP_PAUSE_OFF
-	LD	E,A
-	LD	A,E
-	CALL	PLAYLIST_DELSEQ_CHECK
-	CP	0
-	JR	Z,PTXLP_PAUSE_DEL3
-	CP	$FF
-	JP	Z,PTXLP_PAUSE_WAIT1
-	LD	A,E
-	LD	E,A
-	LD	A,(ALLMD)
-	OR	A
-	JR	Z,PTXLP_PAUSE_KEYDEC
-	LD	A,E
-	CALL	PLAYLIST_MAP_KEY
-	LD	E,A
-PTXLP_PAUSE_KEYDEC:
-	LD	A,E
-	CP	27
-	JP	Z,PTXLP_ESC
-	CP	'l'
-	JP	Z,PTXLP_PAUSE_LOOP_TRACK
-	CP	'L'
-	JP	Z,PTXLP_PAUSE_LOOP_PLAY
-	AND	$DF
-	CP	'R'
-	JP	Z,PTXLP_PAUSE_REDRAW
-	CP	'N'
-	JP	Z,PTXLP_PAUSE_NEXT
-	CP	'P'
-	JP	Z,PTXLP_PAUSE_PREV
-	CP	'A'
-	JP	Z,PTXLP_PAUSE_NAV
-	CP	'D'
-	JP	Z,PTXLP_PAUSE_NAV
-	CP	'W'
-	JP	Z,PTXLP_PAUSE_NAV
-	CP	'S'
-	JP	Z,PTXLP_PAUSE_NAV
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_DEL3:
-	LD	A,(ALLMD)
-	OR	A
-	JP	Z,PTXLP_PAUSE_WAIT1
-	CALL	PLAYLIST_CONFIRM_DELETE
-	OR	A
-	JP	Z,PTXLP_PAUSE_WAIT1
-	CALL	PLAYLIST_DELETE_SELECTED
-	OR	A
-	JP	Z,PTXLP_PAUSE_WAIT1
-	JP	EXIT
-PTXLP_PAUSE_WAIT1:
-	CALL	WAITQ
-	JR	PTXLP_PAUSE_WAIT
-PTXLP_PAUSE_OFF:
-	XOR	A
-	LD	(PAUSEMD),A
-	LD	A,(NAVREQ)
-	OR	A
-	JP	NZ,EXIT
-	CALL	PRTPLAYMSG
-	JP	PTXLP_KEY1
-PTXLP_PAUSE_NAV:
-	CALL	PLAYLIST_MOVE_WASD
-	JP	Z,PTXLP_PAUSE_WAIT1
-	LD	A,$FF
-	LD	(NAVREQ),A
-	CALL	PAUSE_REFRESH_SELECTION
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_NEXT:
-	LD	A,(PLIDX)
-	LD	(PLIDXOLD),A
-	CALL	PLAYLIST_ADVANCE
-	JR	NZ,PTXLP_PAUSE_NEXT1
-	LD	A,(LOOPPLMD)
-	OR	A
-	JP	Z,PTXLP_PAUSE_WAIT1
-	CALL	PLAYLIST_RESTORE
-PTXLP_PAUSE_NEXT1:
-	LD	A,$FF
-	LD	(NAVREQ),A
-	CALL	PAUSE_REFRESH_SELECTION
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_PREV:
-	LD	A,(PLIDX)
-	LD	(PLIDXOLD),A
-	CALL	PLAYLIST_PREV
-	JP	Z,PTXLP_PAUSE_WAIT1
-	LD	A,$FF
-	LD	(NAVREQ),A
-	CALL	PAUSE_REFRESH_SELECTION
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_REDRAW:
-	CALL	SHOWPLSTATUS
-	CALL	PRTPLAYINFO
-	CALL	PRTSONGMETA
-	CALL	PRTPAUSEMSG
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_LOOP_TRACK:
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,PTXLP_PAUSE_LOOP_TRACK_ON
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_LOOP_TRACK_ON:
-	LD	A,$FF
-	LD	(LOOPTRKMD),A
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_LOOP_PLAY:
-	LD	A,(LOOPPLMD)
-	OR	A
-	JR	Z,PTXLP_PAUSE_LOOP_PLAY_ON
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_PAUSE_LOOP_PLAY_ON:
-	LD	A,$FF
-	LD	(LOOPPLMD),A
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	PTXLP_PAUSE_WAIT1
-PTXLP_LOOP_TRACK:
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,PTXLP_LOOP_TRACK_ON
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JR	PTXLP_KEY1
-PTXLP_LOOP_TRACK_ON:
-	LD	A,$FF
-	LD	(LOOPTRKMD),A
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JR	PTXLP_KEY1
-PTXLP_LOOP_PLAY:
-	LD	A,(LOOPPLMD)
-	OR	A
-	JR	Z,PTXLP_LOOP_PLAY_ON
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JR	PTXLP_KEY1
-PTXLP_LOOP_PLAY_ON:
-	LD	A,$FF
-	LD	(LOOPPLMD),A
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JR	PTXLP_KEY1
-PTXLP_PREV:
-	LD	A,$FF
-	LD	(PREVREQ),A
-	JP	EXIT
-PTXLP_SHOWQ:
-	CALL	SHOWPLSTATUS
-	CALL	PRTPLAYINFO
-	LD	A,(UI_ACTIVE)
-	OR	A
-	JR	NZ,PTXLP_SHOWQ1
-	LD	A,(INFOLINE)
-	OR	A
-	JR	Z,PTXLP_SHOWQ0
-	CALL	CRLF2
-	JR	PTXLP_SHOWQ1
-PTXLP_SHOWQ0:
-	CALL	CRLF
-PTXLP_SHOWQ1:
-	CALL	PRTSONGMETA
-	CALL	PRTPLAYMSG
-	JP	PTXLP
-PTXLP_ESC:
-	CALL	MUTE_NOW
-PTXLP_ABRT:
-	LD	A,$FF
-	LD	(STOPREQ),A
-	JP	EXIT
-PTXLP_KEY1:
-	CALL	WAITQ		; Wait one quark period
-	JP	PTXLP			; Loop for next quark
-;
-gomym
-	LD	A,(UI_ACTIVE)
-	OR	A
-	JR	NZ,gomym0
-	CALL	CRLF2			; Formatting
-gomym0
-	CALL	PRTPLAYMSG		; Playing message
-	ld	hl,(QDLY)			; Get basic quark delay
-	or	a					; Clear carry
-	ld	de,125				; Avg TS / quark = ~5000, so 125 delay loops
-	sbc	hl,de				; Adjust for file type
-	ld	(QDLY),hl			; Save updated quark delay factor
-	;ld	bc,(rows)
-	;call	PRTHEXWORD
-	call	mymini			; Initialize player
-        call    extract 	; Unpack the first fragment
-mymlp	call	extract
-	jp	nc,EXIT				; CF clear at end of tune
-waitvb	call	WAITQ
-	call	upsg			; Update PSG registers
-	call	GETKEY			; Check for keypress
-	jp	z,waitvb1
-	ld	e,a			; save raw key
-	ld	a,e
-	cp	' '
-	jp	z,mymkey_pause_toggle
-	call	PLAYLIST_DELSEQ_CHECK
-	cp	0
-	jr	z,mymkey_del3
-	cp	$FF
-	jp	z,waitvb1
-	ld	a,(ALLMD)
-	or	a
-	jp	z,mymkey_abrt		; non-playlist: any key aborts
-	ld	a,e
-	call	PLAYLIST_MAP_KEY
-	ld	e,a
-	cp	27
-	jp	z,mymkey_esc		; ESC quits
-	ld	a,e
-	cp	'l'
-	jp	z,mymkey_loop_track
-	cp	'L'
-	jp	z,mymkey_loop_play
-	and	$DF
-	cp	'R'
-	jp	z,mymkey_showq
-	cp	'P'
-	jp	z,mymkey_prev
-	cp	'N'
-	jp	z,mymkey_next
-	cp	'A'
-	jp	z,mymkey_nav
-	cp	'D'
-	jp	z,mymkey_nav
-	cp	'W'
-	jp	z,mymkey_nav
-	cp	'S'
-	jp	z,mymkey_nav
-	jp	waitvb1			; unrecognised key: ignore
-mymkey_del3:
-	ld	a,(ALLMD)
-	or	a
-	jp	z,waitvb1
-	call	PLAYLIST_CONFIRM_DELETE
-	or	a
-	jp	z,waitvb1
-	call	PLAYLIST_DELETE_SELECTED
-	or	a
-	jp	z,waitvb1
-	jp	EXIT
-mymkey_nav:
-	call	PLAYLIST_MOVE_WASD
-	jp	z,waitvb1		; no move
-	ld	a,$FF
-	ld	(NAVREQ),a
-	jp	EXIT
-mymkey_prev:
-	ld	a,$FF
-	ld	(PREVREQ),a
-	jp	EXIT
-mymkey_next:
-	ld	a,$FF
-	ld	(SKIPREQ),a
-	jp	EXIT
-mymkey_pause_toggle:
-	ld	a,(PAUSEMD)
-	or	a
-	jr	z,mymkey_pause_on
-	xor	a
-	ld	(PAUSEMD),a
-	jp	waitvb1
-mymkey_pause_on:
-	ld	a,$FF
-	ld	(PAUSEMD),a
-	call	MUTE_NOW
-	call	PRTPAUSEMSG
-mymkey_pause_wait:
-	call	GETKEY
-	jp	z,mymkey_pause_wait1
-	cp	' '
-	jr	z,mymkey_pause_off
-	ld	e,a
-	ld	a,e
-	call	PLAYLIST_DELSEQ_CHECK
-	cp	0
-	jr	z,mymkey_pause_del3
-	cp	$FF
-	jp	z,mymkey_pause_wait1
-	ld	a,e
-	ld	e,a
-	ld	a,(ALLMD)
-	or	a
-	jr	z,mymkey_pause_keydec
-	ld	a,e
-	call	PLAYLIST_MAP_KEY
-	ld	e,a
-mymkey_pause_keydec:
-	ld	a,e
-	cp	27
-	jp	z,mymkey_esc
-	cp	'l'
-	jp	z,mymkey_pause_loop_track
-	cp	'L'
-	jp	z,mymkey_pause_loop_play
-	and	$DF
-	cp	'R'
-	jp	z,mymkey_pause_redraw
-	cp	'N'
-	jp	z,mymkey_pause_next
-	cp	'P'
-	jp	z,mymkey_pause_prev
-	cp	'A'
-	jp	z,mymkey_pause_nav
-	cp	'D'
-	jp	z,mymkey_pause_nav
-	cp	'W'
-	jp	z,mymkey_pause_nav
-	cp	'S'
-	jp	z,mymkey_pause_nav
-	jp	mymkey_pause_wait1
-mymkey_pause_del3:
-	ld	a,(ALLMD)
-	or	a
-	jp	z,mymkey_pause_wait1
-	call	PLAYLIST_CONFIRM_DELETE
-	or	a
-	jp	z,mymkey_pause_wait1
-	call	PLAYLIST_DELETE_SELECTED
-	or	a
-	jp	z,mymkey_pause_wait1
-	jp	EXIT
-mymkey_pause_wait1:
-	call	WAITQ
-	jr	mymkey_pause_wait
-mymkey_pause_off:
-	xor	a
-	ld	(PAUSEMD),a
-	ld	a,(NAVREQ)
-	or	a
-	jp	nz,EXIT
-	call	PRTPLAYMSG
-	jp	waitvb1
-mymkey_pause_nav:
-	call	PLAYLIST_MOVE_WASD
-	jp	z,mymkey_pause_wait1
-	ld	a,$FF
-	ld	(NAVREQ),a
-	call	PAUSE_REFRESH_SELECTION
-	jp	mymkey_pause_wait1
-mymkey_pause_next:
-	ld	a,(PLIDX)
-	ld	(PLIDXOLD),a
-	call	PLAYLIST_ADVANCE
-	jr	nz,mymkey_pause_next1
-	ld	a,(LOOPPLMD)
-	or	a
-	jp	z,mymkey_pause_wait1
-	call	PLAYLIST_RESTORE
-mymkey_pause_next1:
-	ld	a,$FF
-	ld	(NAVREQ),a
-	call	PAUSE_REFRESH_SELECTION
-	jp	mymkey_pause_wait1
-mymkey_pause_prev:
-	ld	a,(PLIDX)
-	ld	(PLIDXOLD),a
-	call	PLAYLIST_PREV
-	jp	z,mymkey_pause_wait1
-	ld	a,$FF
-	ld	(NAVREQ),a
-	call	PAUSE_REFRESH_SELECTION
-	jp	mymkey_pause_wait1
-mymkey_pause_redraw:
-	CALL	SHOWPLSTATUS
-	CALL	PRTPLAYINFO
-	CALL	PRTSONGMETA
-	CALL	PRTPAUSEMSG
-	jp	mymkey_pause_wait1
-mymkey_pause_loop_track:
-	ld	a,(LOOPTRKMD)
-	or	a
-	jr	z,mymkey_pause_loop_track_on
-	xor	a
-	ld	(LOOPTRKMD),a
-	call	SHOWLOOPSTATUS
-	call	PRTPAUSEMSG
-	jp	mymkey_pause_wait1
-mymkey_pause_loop_track_on:
-	ld	a,$FF
-	ld	(LOOPTRKMD),a
-	xor	a
-	ld	(LOOPPLMD),a
-	call	SHOWLOOPSTATUS
-	call	PRTPAUSEMSG
-	jp	mymkey_pause_wait1
-mymkey_pause_loop_play:
-	ld	a,(LOOPPLMD)
-	or	a
-	jr	z,mymkey_pause_loop_play_on
-	xor	a
-	ld	(LOOPPLMD),a
-	call	SHOWLOOPSTATUS
-	call	PRTPAUSEMSG
-	jp	mymkey_pause_wait1
-mymkey_pause_loop_play_on:
-	ld	a,$FF
-	ld	(LOOPPLMD),a
-	xor	a
-	ld	(LOOPTRKMD),a
-	call	SHOWLOOPSTATUS
-	call	PRTPAUSEMSG
-	jp	mymkey_pause_wait1
-mymkey_loop_track:
-	ld	a,(LOOPTRKMD)
-	or	a
-	jr	z,mymkey_loop_track_on
-	xor	a
-	ld	(LOOPTRKMD),a
-	call	SHOWLOOPSTATUS
-	call	LOOP_STATUS_POST
-	jp	waitvb1
-mymkey_loop_track_on:
-	ld	a,$FF
-	ld	(LOOPTRKMD),a
-	xor	a
-	ld	(LOOPPLMD),a
-	call	SHOWLOOPSTATUS
-	call	LOOP_STATUS_POST
-	jp	waitvb1
-mymkey_loop_play:
-	ld	a,(LOOPPLMD)
-	or	a
-	jr	z,mymkey_loop_play_on
-	xor	a
-	ld	(LOOPPLMD),a
-	call	SHOWLOOPSTATUS
-	call	LOOP_STATUS_POST
-	jp	waitvb1
-mymkey_loop_play_on:
-	ld	a,$FF
-	ld	(LOOPPLMD),a
-	xor	a
-	ld	(LOOPTRKMD),a
-	call	SHOWLOOPSTATUS
-	call	LOOP_STATUS_POST
-	jp	waitvb1
-mymkey_showq:
-	CALL	SHOWPLSTATUS
-	CALL	PRTPLAYINFO
-	CALL	PRTSONGMETA
-	CALL	PRTPLAYMSG
-	jp	mymlp
-mymkey_esc:
-	CALL	MUTE_NOW
-mymkey_abrt:
-	ld	a,$FF
-	ld	(STOPREQ),a
-	jp	EXIT			; Bail out if so
-waitvb1
-	ld      a,(played)		; Wait until VBI has played a fragment
-        or      a
-        jp      nz,waitvb
-        ld      (psource),iy
-        ld      a,FRAG
-        ld      (played),a
-	;call	PRTDOT
-	jp	mymlp
-;
 ;
 ;===============================================================================
 ; goVGM - Play a VGM file
@@ -1131,430 +479,28 @@ waitvb1
 ; Keyboard navigation matches the MYM / PT3 player.
 ;===============================================================================
 
-goVGM:
-	CALL	VGM_VALIDATE_IMAGE	; fail fast if VGM image is truncated
+#include "vgm_runtime.inc"
 
-	; Probe AY chip ports into TS_PORTS1/TS_PORTS2 (same as TurboSound PT3)
-	ISHBIOS
-	JR	NZ,goVGM_portsfb	; HBIOS mode: skip direct probe for AY
-	CALL	TS_PORTS_SETUP		; populates TS_PORTS1 and TS_PORTS2
-goVGM_portsfb:
-	; If TS_PORTS1 is zero (e.g. HBIOS mode), seed it from PORTS so AY
-	; writes don't go to port 0.
-	LD	HL,(TS_PORTS1)
-	LD	A,H
-	OR	L
-	JR	NZ,goVGM_fdly
-	LD	HL,(PORTS)		; fallback: copy active PORTS word
-	LD	(TS_PORTS1),HL
-
-goVGM_fdly:
-	LD	BC,$F8F0		; HBIOS SYSGET/CPUINFO
-	RST	08			; L := CPU index/code
-	LD	A,L
-	CALL	VGM_SETFDELAY
-goVGM_fd_done:
-
-	; Mark this track as VGM so EXIT skips the PT3 MUTE call
-	LD	A,$FF
-	LD	(VGMFLAG),A
-
-	; Compute stream start address from VGM header offset field at +0x34
-	; Absolute start = (vgmdata+0x34) + value_at(vgmdata+0x34)
-	; If offset field is 0 (v1.00 files), default stream starts at +0x40
-	LD	HL,(vgmdata + 34H)
-	LD	A,H
-	OR	L
-	JR	NZ,goVGM_ofs
-	LD	HL,0CH			; v1.00/zero-offset default: stream at vgmdata+0x40 (=0x34+0x0C)
-goVGM_ofs:
-	LD	DE,vgmdata + 34H	; address of the offset field itself
-	ADD	HL,DE			; absolute command stream start
-	LD	(vgmpos),HL
-
-	; Initialise delay counter
-	LD	HL,0
-	LD	(vgmdly),HL
-	XOR	A
-	LD	(VGMKEYCHK),A		; poll keyboard every 32 loops (responsive, low overhead)
-
-	; Print VGM metadata block before "Playing..."
-	LD	A,(UI_ACTIVE)
-	OR	A
-	JR	NZ,goVGM_meta0
-	LD	A,(INFOLINE)
-	OR	A
-	JR	Z,goVGM_meta1
-	CALL	CRLF2
-	JR	goVGM_meta0
-goVGM_meta1:
-	CALL	CRLF
-goVGM_meta0:
-	CALL	PRTVGMMETA
-
-	; Print "Playing..." (deferred hardware info already shown by PRTPLAYINFO)
-	CALL	PRTPLAYMSG		; "Playing..."
-
-	; Flush any stale key presses
-	LD	A,(ALLMD)
-	OR	A
-	JR	NZ,goVGM_flush
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,goVGM_lp
-goVGM_flush:
-	CALL	FLUSHKEYS
-
-;-----------------------------------------------------------------------
-; Main VGM playback loop
-;-----------------------------------------------------------------------
-goVGM_lp:
-	CALL	VGM_PLAY_FRAME		; process commands until next wait
-	JP	Z,goVGM_done		; Z = end of stream (no loop)
-
-	; Check for keypress every 32 loops.
-	LD	A,(VGMKEYCHK)
-	DEC	A
-	AND	01FH
-	LD	(VGMKEYCHK),A
-	JP	NZ,goVGM_nodelay
-	CALL	GETKEY
-	JP	Z,goVGM_nodelay		; no key pressed
-
-	LD	E,A			; save raw key
-	CP	' '
-	JP	Z,goVGM_pause_toggle
-	CALL	PLAYLIST_DELSEQ_CHECK
-	CP	0
-	JR	Z,goVGM_del3
-	CP	$FF
-	JP	Z,goVGM_nodelay
-	LD	A,(ALLMD)
-	OR	A
-	JP	Z,goVGM_abrt		; non-playlist: any key aborts
-	LD	A,E
-	CALL	PLAYLIST_MAP_KEY
-	LD	E,A
-	CP	27			; ESC
-	JP	Z,goVGM_esc
-	CP	'l'
-	JP	Z,goVGM_lp_looptrk
-	CP	'L'
-	JP	Z,goVGM_lp_loopply
-	AND	$DF			; uppercase
-	CP	'R'
-	JP	Z,goVGM_showq
-	CP	'P'
-	JP	Z,goVGM_prev
-	CP	'N'
-	JP	Z,goVGM_next
-	CP	'A'
-	JP	Z,goVGM_nav
-	CP	'D'
-	JP	Z,goVGM_nav
-	CP	'W'
-	JP	Z,goVGM_nav
-	CP	'S'
-	JP	Z,goVGM_nav
-	JP	goVGM_nodelay
-
-goVGM_del3:
-	LD	A,(ALLMD)
-	OR	A
-	JP	Z,goVGM_nodelay
-	CALL	PLAYLIST_CONFIRM_DELETE
-	OR	A
-	JP	Z,goVGM_nodelay
-	CALL	PLAYLIST_DELETE_SELECTED
-	OR	A
-	JP	Z,goVGM_nodelay
-	JP	goVGM_exit_mute
-
-goVGM_nav:
-	CALL	PLAYLIST_MOVE_WASD
-	JP	Z,goVGM_nodelay
-	LD	A,$FF
-	LD	(NAVREQ),A
-	JP	goVGM_exit_mute
-
-goVGM_next:
-	LD	A,$FF
-	LD	(SKIPREQ),A
-	JP	goVGM_exit_mute
-
-goVGM_prev:
-	LD	A,$FF
-	LD	(PREVREQ),A
-	JP	goVGM_exit_mute
-
-goVGM_lp_looptrk:
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,goVGM_lt_on
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JP	goVGM_nodelay
-goVGM_lt_on:
-	LD	A,$FF
-	LD	(LOOPTRKMD),A
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JP	goVGM_nodelay
-
-goVGM_lp_loopply:
-	LD	A,(LOOPPLMD)
-	OR	A
-	JR	Z,goVGM_lp_on
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JP	goVGM_nodelay
-goVGM_lp_on:
-	LD	A,$FF
-	LD	(LOOPPLMD),A
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	LOOP_STATUS_POST
-	JP	goVGM_nodelay
-
-goVGM_showq:
-	CALL	SHOWPLSTATUS
-	CALL	PRTPLAYINFO
-	LD	A,(UI_ACTIVE)
-	OR	A
-	JR	NZ,goVGM_showq0
-	LD	A,(INFOLINE)
-	OR	A
-	JR	Z,goVGM_showq1
-	CALL	CRLF2
-	JR	goVGM_showq0
-goVGM_showq1:
-	CALL	CRLF
-goVGM_showq0:
-	CALL	PRTVGMMETA
-	CALL	PRTPLAYMSG
-	JP	goVGM_lp
-
-goVGM_pause_toggle:
-	LD	A,(PAUSEMD)
-	OR	A
-	JR	Z,goVGM_pause_on
-	XOR	A
-	LD	(PAUSEMD),A
-	JP	goVGM_nodelay
-goVGM_pause_on:
-	LD	A,$FF
-	LD	(PAUSEMD),A
-	CALL	MUTE_NOW
-	CALL	PRTPAUSEMSG
-goVGM_pause_wait:
-	CALL	GETKEY
-	JP	Z,goVGM_pause_yield
-	CP	' '
-	JR	Z,goVGM_pause_off
-	LD	E,A
-	CALL	PLAYLIST_DELSEQ_CHECK
-	CP	0
-	JR	Z,goVGM_pause_del3
-	CP	$FF
-	JP	Z,goVGM_pause_yield
-	LD	A,E
-	LD	E,A
-	LD	A,(ALLMD)
-	OR	A
-	JR	Z,goVGM_pause_kdec
-	LD	A,E
-	CALL	PLAYLIST_MAP_KEY
-	LD	E,A
-goVGM_pause_kdec:
-	LD	A,E
-	CP	27
-	JP	Z,goVGM_esc
-	CP	'l'
-	JP	Z,goVGM_pause_lt
-	CP	'L'
-	JP	Z,goVGM_pause_lp
-	AND	$DF
-	CP	'R'
-	JP	Z,goVGM_pause_redraw
-	CP	'N'
-	JP	Z,goVGM_pause_next
-	CP	'P'
-	JP	Z,goVGM_pause_prev
-	CP	'A'
-	JP	Z,goVGM_pause_nav
-	CP	'D'
-	JP	Z,goVGM_pause_nav
-	CP	'W'
-	JP	Z,goVGM_pause_nav
-	CP	'S'
-	JP	Z,goVGM_pause_nav
-	JP	goVGM_pause_yield
-goVGM_pause_del3:
-	LD	A,(ALLMD)
-	OR	A
-	JP	Z,goVGM_pause_yield
-	CALL	PLAYLIST_CONFIRM_DELETE
-	OR	A
-	JP	Z,goVGM_pause_yield
-	CALL	PLAYLIST_DELETE_SELECTED
-	OR	A
-	JP	Z,goVGM_pause_yield
-	JP	goVGM_exit_mute
-goVGM_pause_yield:
-	CALL	WAITQ
-	JR	goVGM_pause_wait
-goVGM_pause_off:
-	XOR	A
-	LD	(PAUSEMD),A
-	LD	A,(NAVREQ)
-	OR	A
-	JP	NZ,goVGM_exit_mute
-	CALL	PRTPLAYMSG
-	JP	goVGM_nodelay
-goVGM_pause_nav:
-	CALL	PLAYLIST_MOVE_WASD
-	JP	Z,goVGM_pause_yield
-	LD	A,$FF
-	LD	(NAVREQ),A
-	CALL	PAUSE_REFRESH_SELECTION
-	JP	goVGM_pause_yield
-goVGM_pause_next:
-	LD	A,(PLIDX)
-	LD	(PLIDXOLD),A
-	CALL	PLAYLIST_ADVANCE
-	JR	NZ,goVGM_pause_next1
-	LD	A,(LOOPPLMD)
-	OR	A
-	JP	Z,goVGM_pause_yield
-	CALL	PLAYLIST_RESTORE
-goVGM_pause_next1:
-	LD	A,$FF
-	LD	(NAVREQ),A
-	CALL	PAUSE_REFRESH_SELECTION
-	JP	goVGM_pause_yield
-goVGM_pause_prev:
-	LD	A,(PLIDX)
-	LD	(PLIDXOLD),A
-	CALL	PLAYLIST_PREV
-	JP	Z,goVGM_pause_yield
-	LD	A,$FF
-	LD	(NAVREQ),A
-	CALL	PAUSE_REFRESH_SELECTION
-	JP	goVGM_pause_yield
-goVGM_pause_redraw:
-	CALL	SHOWPLSTATUS
-	CALL	PRTPLAYINFO
-	CALL	PRTPAUSEMSG
-	JP	goVGM_pause_yield
-goVGM_pause_lt:
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,goVGM_pause_lt_on
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	goVGM_pause_yield
-goVGM_pause_lt_on:
-	LD	A,$FF
-	LD	(LOOPTRKMD),A
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	goVGM_pause_yield
-goVGM_pause_lp:
-	LD	A,(LOOPPLMD)
-	OR	A
-	JR	Z,goVGM_pause_lp_on
-	XOR	A
-	LD	(LOOPPLMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	goVGM_pause_yield
-goVGM_pause_lp_on:
-	LD	A,$FF
-	LD	(LOOPPLMD),A
-	XOR	A
-	LD	(LOOPTRKMD),A
-	CALL	SHOWLOOPSTATUS
-	CALL	PRTPAUSEMSG
-	JP	goVGM_pause_yield
-
-goVGM_esc:
-	CALL	MUTE_NOW
-goVGM_abrt:
-	LD	A,$FF
-	LD	(STOPREQ),A
-	JP	goVGM_exit_mute
-
-goVGM_nodelay:
-	LD	A,(vgmfdcyc)
-	OR	A
-	JR	Z,goVGM_nodelay_base
-	LD	B,A
-	LD	A,(vgmfdpos)
-	INC	A
-	CP	B
-	JR	C,goVGM_nodelay_posok
-	XOR	A
-goVGM_nodelay_posok:
-	LD	(vgmfdpos),A
-	LD	C,A
-	LD	A,(vgmfdlo)
-	CP	C
-	JR	Z,goVGM_nodelay_base
-	JR	C,goVGM_nodelay_base
-	LD	A,(vgmfdly0)
-	DEC	A
-	LD	(vgmfdly),A
-	JR	goVGM_nodelay_apply
-goVGM_nodelay_base:
-	LD	A,(vgmfdly0)
-	LD	(vgmfdly),A
-goVGM_nodelay_apply:
-	CALL	VGM_APPLY_DELAY
-	JP	goVGM_lp
-
-goVGM_done:
-	; End of stream reached normally
-goVGM_exit_mute:
-	CALL	VGM_MUTE_ALL		; Silence all hardware
-	JP	EXIT
-
-;
-; Validate loaded VGM size against the header EOF offset (bytes 0x04..0x07).
-; Expected file size is EOF offset + 4 bytes (32-bit value).
-; If expected size exceeds 64K, or loaded bytes are smaller than expected,
-; the file is truncated/corrupt for our in-memory playback model.
-;
 VGM_VALIDATE_IMAGE:
 	LD	HL,(vgmdata + 04H)	; low 16 bits of EOF offset
 	LD	DE,4
-	ADD	HL,DE			; expected size low16 = eof+4
+	ADD	HL,DE				; expected size low16 = eof+4
 	LD	A,(vgmdata + 06H)	; high 16 bits of EOF offset (LSB first)
 	LD	C,A
 	LD	A,(vgmdata + 07H)
-	LD	B,A			; BC = high16 eof
+	LD	B,A					; BC = high16 eof
 	JR	NC,VGM_VAL0
-	INC	BC			; propagate carry from +4 into high16
+	INC	BC					; propagate carry from +4 into high16
 VGM_VAL0:
 	LD	A,B
 	OR	C
-	JP	NZ,ERRVGMTR		; expected size exceeds 64K
+	JP	NZ,ERRVGMTR			; expected size exceeds 64K
 	LD	DE,(LOADBYTES)		; actual loaded bytes
-	OR	A			; clear carry before 16-bit SBC
-	SBC	HL,DE			; expected - loaded
-	RET	Z			; exact fit
-	RET	C			; loaded >= expected
-	JP	ERRVGMTR		; loaded < expected => truncated image
+	OR	A					; clear carry before 16-bit SBC
+	SBC	HL,DE				; expected - loaded
+	RET	Z					; exact fit
+	RET	C					; loaded >= expected
+	JP	ERRVGMTR			; loaded < expected => truncated image
 ;
 EXIT	LD	A,(SKIPREQ)		; mute all cards immediately on track navigation
 	OR	A
@@ -1692,30 +638,12 @@ EXITP:
 ; Configure runtime YM2151 ports from CLI switch selection.
 ; YM2151MAP = 0 => 0xDE/0xDF, YM2151MAP = 1 => 0xFE/0xFF.
 ;
-YM2151_PORTCFG:
-	LD	A,(YM2151MAP)
-	OR	A
-	JR	Z,YM2151_PORTCFG_DE
-	LD	A,0FEH
-	LD	(YM2151SELV),A
-	LD	A,0FFH
-	LD	(YM2151DATV),A
-	XOR	A
-	LD	(YM2151SEL2V),A
-	LD	(YM2151DAT2V),A
-	RET
-YM2151_PORTCFG_DE:
-	LD	A,0DEH
-	LD	(YM2151SELV),A
-	LD	A,0DFH
-	LD	(YM2151DATV),A
-	XOR	A
-	LD	(YM2151SEL2V),A
-	LD	(YM2151DAT2V),A
-	RET
+#include "hwcfg.inc"
 
 #include "timing.inc"
 #include "strings.inc"
+#include "keyctl.inc"
+#include "playback_core.inc"
 #include "cli.inc"
 #include "printing.inc"
 #include "termcfg.inc"
@@ -2901,71 +1829,6 @@ PRTCPUSPD_DIV10_DONE:
 	POP	AF
 	RET
 
-PLAYLIST_MAP_KEY:
-	CP	27
-	RET	NZ
-	LD	A,(UI_ACTIVE)
-	OR	A
-	JR	Z,PLAYLIST_MAP_KEY0
-	CALL	GETKEY			; immediate check: makes bare Esc mute/quit fast
-	JR	Z,PLAYLIST_MAP_KEY0
-	CP	'['
-	JR	Z,PLAYLIST_MAP_KEY1
-	CP	'O'
-	JR	NZ,PLAYLIST_MAP_KEY0
-PLAYLIST_MAP_KEY1:
-	CALL	PLAYLIST_GETKEY_WAIT
-	JR	Z,PLAYLIST_MAP_KEY0
-	CP	'3'
-	JR	Z,PLAYLIST_MAP_DEL1
-	CP	'A'
-	JR	Z,PLAYLIST_MAP_UP
-	CP	'B'
-	JR	Z,PLAYLIST_MAP_DOWN
-	CP	'C'
-	JR	Z,PLAYLIST_MAP_RIGHT
-	CP	'D'
-	JR	Z,PLAYLIST_MAP_LEFT
-PLAYLIST_MAP_KEY0:
-	LD	A,27
-	RET
-PLAYLIST_MAP_DEL1:
-	CALL	PLAYLIST_GETKEY_WAIT
-	JR	Z,PLAYLIST_MAP_KEY0
-	CP	'~'
-	JR	NZ,PLAYLIST_MAP_KEY0
-	LD	A,$7F			; DEL key
-	RET
-PLAYLIST_MAP_UP:
-	LD	A,'W'
-	RET
-PLAYLIST_MAP_DOWN:
-	LD	A,'S'
-	RET
-PLAYLIST_MAP_RIGHT:
-	LD	A,'D'
-	RET
-PLAYLIST_MAP_LEFT:
-	LD	A,'A'
-	RET
-
-PLAYLIST_GETKEY_WAIT:
-	PUSH	HL
-	LD	HL,$0080			; short wait for sequence continuation
-PLAYLIST_GETKEY_WAIT1:
-	PUSH	HL				; protect counter: BDOS trashes HL
-	CALL	GETKEY
-	POP	HL				; restore counter
-	JR	NZ,PLAYLIST_GETKEY_WAIT2
-	DEC	HL
-	LD	A,H
-	OR	L
-	JR	NZ,PLAYLIST_GETKEY_WAIT1
-	XOR	A
-PLAYLIST_GETKEY_WAIT2:
-	POP	HL
-	OR	A
-	RET
 ;
 ; Drain any pending console keypresses (used to clear command-enter residue).
 ;
@@ -2999,52 +1862,9 @@ PRTWMOD_DLY:
 	LD	DE,MSGDLY
 PRTWMOD_P:
 	JP	PRTSTR
-;
-; Playlist support for -list mode
-;
-PLAYLIST_INIT:
-	XOR	A
-	LD	(PLCNT),A
-	LD	(PLIDX),A
-	LD	(STOPREQ),A
-	LD	(PLSHOWN),A
-	RET
-;
-PLAYLIST_SNAPSHOT:
-	LD	A,(PLCNT)
-	LD	(PLCNT0),A
-	OR	A
-	RET	Z
-	LD	B,A
-	LD	HL,PLAYLIST
-	LD	DE,PLAYLIST0
-PLAYLIST_SNAPSHOT1:
-	PUSH	BC
-	LD	BC,12
-	LDIR
-	POP	BC
-	DJNZ	PLAYLIST_SNAPSHOT1
-	RET
-;
-PLAYLIST_RESTORE:
-	LD	A,(PLCNT0)
-	LD	(PLCNT),A
-	XOR	A
-	LD	(PLIDX),A
-	LD	A,(PLCNT)
-	OR	A
-	RET	Z
-	LD	B,A
-	LD	HL,PLAYLIST0
-	LD	DE,PLAYLIST
-PLAYLIST_RESTORE1:
-	PUSH	BC
-	LD	BC,12
-	LDIR
-	POP	BC
-	DJNZ	PLAYLIST_RESTORE1
-	RET
-;
+
+#include "playlist_core.inc"
+
 SINGLE_FCBSAVE:
 	LD	A,(SNGFCBINI)
 	OR	A
@@ -3067,397 +1887,6 @@ SINGLE_FCBRESTORE:
 	LDIR
 	RET
 ;
-PLAYLIST_ENUM_ALL:
-	LD	A,'P'
-	LD	B,'T'
-	LD	C,'2'
-	CALL	PLAYLIST_ENUM_EXT
-	LD	A,'P'
-	LD	B,'T'
-	LD	C,'3'
-	CALL	PLAYLIST_ENUM_EXT
-	LD	A,'M'
-	LD	B,'Y'
-	LD	C,'M'
-	CALL	PLAYLIST_ENUM_EXT
-	LD	A,'V'
-	LD	B,'G'
-	LD	C,'M'
-	CALL	PLAYLIST_ENUM_EXT
-	RET
-
-PLAYLIST_ENUM_EXT:
-	; CLEAR SEARCH FCB
-	PUSH	AF			; save ext1
-	PUSH	BC			; save ext2/ext3
-	LD	HL,PLSRCHFCB
-	XOR	A
-	LD	(HL),A
-	LD	DE,PLSRCHFCB+1
-	LD	BC,35
-	LDIR
-	POP	BC			; restore ext2/ext3
-	POP	AF			; restore ext1
-	LD	E,B			; preserve ext2
-	LD	D,C			; preserve ext3
-	; BUILD PATTERN ????????.XYZ (A/B/C = X/Y/Z)
-	LD	HL,PLSRCHFCB+1		; filename bytes
-	LD	B,8
-PLAYLIST_ENUM_QM:
-	LD	(HL),'?'
-	INC	HL
-	DJNZ	PLAYLIST_ENUM_QM
-	LD	(PLSRCHFCB+9),A	; ext1
-	LD	A,E			; ext2
-	LD	(PLSRCHFCB+10),A
-	LD	A,D			; ext3
-	LD	(PLSRCHFCB+11),A
-	; DMA FOR DIR SEARCH RESULTS
-	LD	DE,PLSRCHBUF
-	LD	C,26
-	CALL	BDOS
-	; SEARCH FIRST
-	LD	DE,PLSRCHFCB
-	LD	C,17
-	CALL	BDOS
-	CP	$FF
-	RET	Z
-	CALL	PLAYLIST_ENUM_ADD
-PLAYLIST_ENUM_EXT1:
-	LD	DE,PLSRCHFCB
-	LD	C,18
-	CALL	BDOS
-	CP	$FF
-	RET	Z
-	CALL	PLAYLIST_ENUM_ADD
-	JR	PLAYLIST_ENUM_EXT1
-;
-PLAYLIST_ENUM_ADD:
-	PUSH	AF
-	LD	A,(PLCNT)
-	CP	PLMAX
-	JR	NC,PLAYLIST_ENUM_ADDX
-	CALL	PLAYLIST_PTR_FROM_A	; HL = DEST ENTRY (12 BYTES)
-	EX	DE,HL			; DE = DEST
-	POP	AF			; A = DIR ENTRY INDEX (0..3)
-	; HL = SOURCE DIR ENTRY + 1 (FILENAME+EXT)
-	LD	L,A
-	LD	H,0
-	ADD	HL,HL			; *2
-	ADD	HL,HL			; *4
-	ADD	HL,HL			; *8
-	ADD	HL,HL			; *16
-	ADD	HL,HL			; *32
-	LD	BC,PLSRCHBUF+1
-	ADD	HL,BC
-	; BUILD FCB ENTRY: DRIVE=0 + 11 BYTES NAME/EXT
-	XOR	A
-	LD	(DE),A
-	INC	DE
-	LD	B,11
-PLAYLIST_ENUM_LP:
-	LD	A,(HL)
-	LD	(DE),A
-	INC	HL
-	INC	DE
-	DJNZ	PLAYLIST_ENUM_LP
-	LD	A,(PLCNT)
-	INC	A
-	LD	(PLCNT),A
-	RET
-PLAYLIST_ENUM_ADDX:
-	POP	AF
-	RET
-;
-PLAYLIST_LOAD_FCB:
-	LD	A,(PLIDX)
-	CALL	PLAYLIST_PTR_FROM_A	; HL = SOURCE ENTRY
-	LD	DE,FCB
-	LD	B,12
-PLAYLIST_LOAD_FCB1:
-	LD	A,(HL)
-	LD	(DE),A
-	INC	HL
-	INC	DE
-	DJNZ	PLAYLIST_LOAD_FCB1
-	XOR	A
-	LD	HL,FCB+12
-	LD	B,24
-PLAYLIST_LOAD_FCB2:
-	LD	(HL),A
-	INC	HL
-	DJNZ	PLAYLIST_LOAD_FCB2
-	RET
-
-PLAYLIST_SET_FILTYP:
-	LD	A,(FCB+9)
-	CP	'M'
-	JR	Z,PLAYLIST_SET_FILTYP_MYM
-	CP	'V'
-	JR	Z,PLAYLIST_SET_FILTYP_VGM
-	LD	A,(FCB+11)
-	CP	'2'
-	JR	Z,PLAYLIST_SET_FILTYP_PT2
-	LD	A,TYPPT3
-	LD	(FILTYP),A
-	RET
-PLAYLIST_SET_FILTYP_PT2:
-	LD	A,TYPPT2
-	LD	(FILTYP),A
-	RET
-PLAYLIST_SET_FILTYP_MYM:
-	LD	A,TYPMYM
-	LD	(FILTYP),A
-	RET
-PLAYLIST_SET_FILTYP_VGM:
-	LD	A,TYPVGM
-	LD	(FILTYP),A
-	RET
-;
-PLAYLIST_ADVANCE:
-	LD	A,(PLIDX)
-	INC	A
-	LD	(PLIDX),A
-	LD	B,A
-	LD	A,(PLCNT)
-	CP	B
-	RET	Z			; NO MORE ENTRIES
-	OR	$FF			; MORE ENTRIES AVAILABLE
-	RET
-
-PLAYLIST_PREV:
-	LD	A,(PLIDX)
-	OR	A
-	JR	Z,PLAYLIST_PREV_WRAP
-	DEC	A
-	LD	(PLIDX),A
-	OR	$FF			; PREVIOUS ENTRY AVAILABLE
-	RET
-PLAYLIST_PREV_WRAP:
-	LD	A,(LOOPPLMD)
-	OR	A
-	RET	Z
-	LD	A,(PLCNT)
-	OR	A
-	RET	Z
-	DEC	A
-	LD	(PLIDX),A
-	OR	$FF
-	RET
-
-PLAYLIST_MOVE_WASD:
-	; IN:  A = key (uppercase W/A/S/D)
-	; OUT: NZ if PLIDX changed, Z if no move
-	LD	(PLM_KEY),A
-	LD	A,(PLCNT)
-	OR	A
-	RET	Z
-	CALL	UI_CALC_COLS
-	LD	A,(PLIDX)
-	LD	B,A			; B = current index
-	LD	C,A			; C = candidate index (default current)
-
-	; Compute current row/col from index and UI_PLCOLS.
-	LD	A,(UI_PLCOLS)
-	LD	D,A			; D = columns per row
-	XOR	A
-	LD	(PLM_ROW),A
-	LD	A,B
-PLM_DIV1:
-	CP	D
-	JR	C,PLM_DIV2
-	SUB	D
-	LD	E,A
-	LD	A,(PLM_ROW)
-	INC	A
-	LD	(PLM_ROW),A
-	LD	A,E
-	JR	PLM_DIV1
-PLM_DIV2:
-	LD	(PLM_COL),A
-
-	; Total rows = ceil(PLCNT / UI_PLCOLS).
-	XOR	A
-	LD	(PLM_ROWS),A
-	LD	A,(PLCNT)
-PLM_ROWS1:
-	OR	A
-	JR	Z,PLM_ROWS2
-	LD	E,A
-	LD	A,(PLM_ROWS)
-	INC	A
-	LD	(PLM_ROWS),A
-	LD	A,E
-	SUB	D
-	JR	C,PLM_ROWS2
-	JR	PLM_ROWS1
-PLM_ROWS2:
-
-	; Current row start and length.
-	CALL	PLM_RECALC_ROW
-
-	LD	A,(PLM_KEY)
-	CP	'A'
-	JR	Z,PLM_LEFT
-	CP	'D'
-	JR	Z,PLM_RIGHT
-	CP	'W'
-	JR	Z,PLM_UP
-	CP	'S'
-	JR	Z,PLM_DOWN
-	XOR	A
-	RET
-
-PLM_LEFT:
-	LD	A,(PLM_COL)
-	OR	A
-	JR	NZ,PLM_LEFT1
-	LD	A,(PLM_ROWLEN)
-	DEC	A
-	LD	(PLM_COL),A
-	JR	PLM_BUILD
-PLM_LEFT1:
-	LD	A,(PLM_COL)
-	DEC	A
-	LD	(PLM_COL),A
-	JR	PLM_BUILD
-
-PLM_RIGHT:
-	LD	A,(PLM_COL)
-	INC	A
-	LD	E,A
-	LD	A,(PLM_ROWLEN)
-	CP	E
-	JR	C,PLM_RIGHT_WRAP
-	JR	Z,PLM_RIGHT_WRAP
-	LD	A,E
-	LD	(PLM_COL),A
-	JR	PLM_BUILD
-PLM_RIGHT_WRAP:
-	XOR	A
-	LD	(PLM_COL),A
-	JR	PLM_BUILD
-
-PLM_UP:
-	LD	A,(PLM_ROW)
-	OR	A
-	JR	NZ,PLM_UP1
-	LD	A,(PLM_ROWS)
-	DEC	A
-	LD	(PLM_ROW),A
-	JR	PLM_UPDN
-PLM_UP1:
-	DEC	A
-	LD	(PLM_ROW),A
-	JR	PLM_UPDN
-
-PLM_DOWN:
-	LD	A,(PLM_ROW)
-	INC	A
-	LD	E,A
-	LD	A,(PLM_ROWS)
-	CP	E
-	JR	C,PLM_DOWN_WRAP
-	JR	Z,PLM_DOWN_WRAP
-	LD	A,E
-	LD	(PLM_ROW),A
-	JR	PLM_UPDN
-PLM_DOWN_WRAP:
-	XOR	A
-	LD	(PLM_ROW),A
-
-PLM_UPDN:
-	CALL	PLM_RECALC_ROW
-	LD	A,(PLM_COL)
-	INC	A
-	LD	E,A
-	LD	A,(PLM_ROWLEN)
-	CP	E
-	JR	NC,PLM_BUILD
-	DEC	A
-	LD	(PLM_COL),A
-	JR	PLM_BUILD
-
-PLM_BUILD:
-	LD	A,(PLM_ROWST)
-	LD	E,A
-	LD	A,(PLM_COL)
-	ADD	A,E
-	LD	C,A
-	JR	PLM_SET
-
-PLM_RECALC_ROW:
-	PUSH	AF
-	PUSH	BC
-	PUSH	DE
-	LD	A,(UI_PLCOLS)
-	LD	D,A
-	LD	A,(PLM_ROW)
-	LD	E,A
-	XOR	A
-	LD	(PLM_ROWST),A
-PLM_RCS0:
-	LD	A,E
-	OR	A
-	JR	Z,PLM_RCS1
-	LD	A,(PLM_ROWST)
-	ADD	A,D
-	LD	(PLM_ROWST),A
-	DEC	E
-	JR	PLM_RCS0
-PLM_RCS1:
-	LD	A,(PLCNT)
-	LD	E,A
-	LD	A,(PLM_ROWST)
-	LD	B,A
-	LD	A,E
-	SUB	B			; remaining entries from this row start
-	LD	E,A
-	LD	A,D
-	CP	E
-	JR	C,PLM_RCS2
-	JR	Z,PLM_RCS2
-	LD	A,E
-	LD	(PLM_ROWLEN),A
-	JR	PLM_RCSX
-PLM_RCS2:
-	LD	A,D
-	LD	(PLM_ROWLEN),A
-PLM_RCSX:
-	POP	DE
-	POP	BC
-	POP	AF
-	RET
-
-PLM_SET:
-	LD	A,B
-	CP	C
-	JR	Z,PLM_NOMOVE
-	LD	A,B
-	LD	(PLIDXOLD),A
-	LD	A,C
-	LD	(PLIDX),A
-	OR	$FF
-	RET
-
-PLM_NOMOVE:
-	XOR	A
-	RET
-;
-PLAYLIST_PTR_FROM_A:
-	; RETURN HL = PLAYLIST + (A * 12)
-	LD	L,A
-	LD	H,0
-	ADD	HL,HL			; 2A
-	LD	E,L
-	LD	D,H			; DE = 2A
-	ADD	HL,HL			; 4A
-	ADD	HL,HL			; 8A
-	ADD	HL,DE			; 10A
-	ADD	HL,DE			; 12A
-	LD	DE,PLAYLIST
-	ADD	HL,DE
-	RET
 ;
 ; Enumerate HBIOS sound devices to detect which PSG port sets exist.
 ; Returns A=mask, Z if any recognized ports were found.
@@ -3466,314 +1895,6 @@ PLAYLIST_PTR_FROM_A:
 ;   bit1: COLECO (50/51/52)
 ;   bit2: RC/EB (D8/D0/D8)
 ;   bit3: RC/MF (D1/D0/D0)
-;
-HB_SND_GETMASK:
-	PUSH	BC
-	PUSH	DE
-	PUSH	HL
-	;
-	LD	BC,BC_SYSGET_SNDCNT
-	RST	08
-	LD	A,E
-	OR	A
-	JP	Z,HBGM_NONE
-	LD	(HBGM_CNT),A
-	XOR	A
-	LD	(HBGM_IDX),A
-	XOR	A
-	LD	(HBGM_MASK),A
-HBGM_LP:
-	LD	A,(HBGM_IDX)
-	LD	C,A					; sound unit number
-	LD	B,BF_SNDQUERY
-	LD	E,BF_SNDQ_DEV		; request device type + ports
-	RST	08
-	OR	A
-	JR	NZ,HBGM_NXT
-	;
-	; For AY, query-dev returns ports in DE: D=RSEL, E=RDAT
-	; We use RSEL as the base identifier for known mappings.
-	LD	A,D			; RSEL
-	CP	$A0
-	JR	NZ,HBGM_C50
-	LD	A,(HBGM_MASK)
-	OR	1
-	LD	(HBGM_MASK),A
-	JR	HBGM_NXT
-HBGM_C50:
-	CP	$50
-	JR	NZ,HBGM_CD8
-	LD	A,(HBGM_MASK)
-	OR	2
-	LD	(HBGM_MASK),A
-	JR	HBGM_NXT
-HBGM_CD8:
-	CP	$D8
-	JR	NZ,HBGM_CD1
-	LD	A,(HBGM_MASK)
-	OR	4
-	LD	(HBGM_MASK),A
-	JR	HBGM_NXT
-HBGM_CD1:
-	CP	$D1
-	JR	NZ,HBGM_NXT
-	LD	A,(HBGM_MASK)
-	OR	8
-	LD	(HBGM_MASK),A
-	JR	NZ,HBGM_NXT
-HBGM_NXT:
-	LD	A,(HBGM_IDX)
-	INC	A
-	LD	(HBGM_IDX),A
-	LD	B,A
-	LD	A,(HBGM_CNT)
-	CP	B
-	JR	NZ,HBGM_LP
-	LD	A,(HBGM_MASK)
-	OR	A
-	JR	Z,HBGM_NONE
-	;
-	POP	HL
-	POP	DE
-	POP	BC
-	LD	A,(HBGM_MASK)
-	OR	A			; set flags
-	RET
-HBGM_NONE:
-	POP	HL
-	POP	DE
-	POP	BC
-	XOR	A
-	OR	A			; Z set
-	RET
-HBGM_CNT	.DB	0
-HBGM_IDX	.DB	0
-HBGM_MASK	.DB	0
-;
-; Configure PSG ports from HBIOS sound enumeration.
-; Preference order when multiple are present: Coleco, then MSX, then RC/EB, then RC/MF.
-; Returns Z on success, NZ on failure.
-;
-HB_SND_AUTOCFG:
-	PUSH	AF
-	PUSH	BC
-	PUSH	DE
-	PUSH	HL
-	CALL	HB_SND_GETMASK
-	JP	Z,HBSA_FAIL
-	LD	B,A			; B = mask (preserve before A is modified below)
-	;
-	; Ensure SLOWIO/NORMIO helpers are inert during probing
-	LD	A,$FF
-	LD	(Z180),A
-	LD	(ACR),A
-	LD	(ACRVAL),A
-	;
-	; HBIOS enumeration is the primary source, but on some systems a second
-	; AY can exist without being enumerated. If HBIOS reports MSX only,
-	; do a robust direct probe for Coleco ($50/$51, read at $52) and prefer
-	; it when present.
-	;
-	BIT	1,B				; already know Coleco?
-	JR	NZ,HBSA_PREF
-	BIT	0,B				; only try probe if MSX exists
-	JR	Z,HBSA_PREF
-	PUSH	BC
-	LD	HL,$5150		; RDAT=51, RSEL=50
-	LD	A,$52			; readback
-	CALL	PROBE_AY
-	POP	BC
-	JR	NZ,HBSA_PREF
-	SET	1,B				; found Coleco
-;
-HBSA_PREF:
-	;
-	; Choose preferred ports when multiple are present:
-	; Coleco, then MSX, then RC/EB, then RC/MF.
-	;
-	BIT	1,B
-	JR	NZ,HBSA_DO_COLECO
-	BIT	0,B
-	JR	NZ,HBSA_DO_MSX
-	BIT	2,B
-	JR	NZ,HBSA_DO_RCEB
-	BIT	3,B
-	JR	NZ,HBSA_DO_RCMF
-	JR	HBSA_FAIL
-	;
-	; Record current platform id in active config
-	;
-HBSA_SETPLT:
-	LD	A,(CURPLT)
-	LD	(PLT),A
-	RET
-HBSA_DO_MSX:
-	CALL	HBSA_SETPLT
-HBSA_CONT:
-	LD	A,$A0
-	LD	(RSEL),A
-	LD	A,$A1
-	LD	(RDAT),A
-	LD	A,$A2
-	LD	(RIN),A
-	LD	A,(CURPLT)
-	CP	27
-	JR	Z,HBSA_MSX_RC2014
-	LD	HL,HWSTR_MSX
-	JR	HBSA_DESC
-HBSA_MSX_RC2014:
-	LD	HL,HWSTR_RCMSX
-	JR	HBSA_DESC
-HBSA_DO_COLECO:
-	LD	A,$50
-	LD	(RSEL),A
-	LD	A,$51
-	LD	(RDAT),A
-	LD	A,$52
-	LD	(RIN),A
-	LD	HL,HWSTR_COLECO
-	JR	HBSA_DESC
-HBSA_DO_RCEB:
-	LD	A,$D8
-	LD	(RSEL),A
-	LD	A,$D0
-	LD	(RDAT),A
-	LD	A,$D8
-	LD	(RIN),A
-	LD	HL,HWSTR_RCEB
-	JR	HBSA_DESC
-HBSA_DO_RCMF:
-	LD	A,$D1
-	LD	(RSEL),A
-	LD	A,$D0
-	LD	(RDAT),A
-	LD	A,$D0
-	LD	(RIN),A
-	LD	HL,HWSTR_RCMF
-HBSA_DESC:
-	LD	(DESC),HL
-	POP	HL
-	POP	DE
-	POP	BC
-	POP	AF
-	XOR	A
-	RET
-HBSA_FAIL:
-	POP	HL
-	POP	DE
-	POP	BC
-	POP	AF
-	OR	$FF
-	RET
-;
-; Configure two distinct PSGs for TurboSound using HBIOS enumeration.
-; Returns Z on success, NZ if fewer than two recognized PSG port sets found.
-;
-HB_SND_GET2:
-	CALL	HB_SND_GETMASK
-	JP	Z,HBS2_FAIL
-	LD	B,A			; B = mask
-	;
-	; Prefer COLECO + MSX
-	BIT	1,B
-	JR	Z,HBS2_TRY_MSXRC
-	BIT	0,B
-	JR	Z,HBS2_TRY_MSXRC
-	LD	HL,$5150
-	LD	(TS_PORTS1),HL
-	LD	DE,TSSTR_COLECO
-	LD	(TS_DESC1),DE
-	LD	HL,$A1A0
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_MSX
-	LD	(TS_DESC2),DE
-	XOR	A
-	RET
-HBS2_TRY_MSXRC:
-	; MSX + RC/EB
-	BIT	0,B
-	JR	Z,HBS2_TRY_COLECORC
-	BIT	2,B
-	JR	Z,HBS2_TRY_MSXMF
-	LD	HL,$A1A0
-	LD	(TS_PORTS1),HL
-	LD	DE,TSSTR_MSX
-	LD	(TS_DESC1),DE
-	LD	HL,$D0D8
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_RC
-	LD	(TS_DESC2),DE
-	XOR	A
-	RET
-HBS2_TRY_MSXMF:
-	; MSX + RC/MF
-	BIT	0,B
-	JR	Z,HBS2_TRY_COLECORC
-	BIT	3,B
-	JR	Z,HBS2_TRY_COLECORC
-	LD	HL,$A1A0
-	LD	(TS_PORTS1),HL
-	LD	DE,TSSTR_MSX
-	LD	(TS_DESC1),DE
-	LD	HL,$D0D1
-	; NOTE: TSSTR_RC represents generic RC ports; MF uses D1/D0 too.
-	LD	HL,$D0D1
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_RC
-	LD	(TS_DESC2),DE
-	XOR	A
-	RET
-HBS2_TRY_COLECORC:
-	; COLECO + RC/EB
-	BIT	1,B
-	JR	Z,HBS2_TRY_COLECOMF
-	BIT	2,B
-	JR	Z,HBS2_TRY_COLECOMF
-	LD	HL,$5150
-	LD	(TS_PORTS1),HL
-	LD	DE,TSSTR_COLECO
-	LD	(TS_DESC1),DE
-	LD	HL,$D0D8
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_RC
-	LD	(TS_DESC2),DE
-	XOR	A
-	RET
-HBS2_TRY_COLECOMF:
-	; COLECO + RC/MF
-	BIT	1,B
-	JR	Z,HBS2_TRY_RCTWO
-	BIT	3,B
-	JR	Z,HBS2_TRY_RCTWO
-	LD	HL,$5150
-	LD	(TS_PORTS1),HL
-	LD	DE,TSSTR_COLECO
-	LD	(TS_DESC1),DE
-	LD	HL,$D0D1
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_RC
-	LD	(TS_DESC2),DE
-	XOR	A
-	RET
-HBS2_TRY_RCTWO:
-	; RC/EB + RC/MF
-	BIT	2,B
-	JR	Z,HBS2_FAIL
-	BIT	3,B
-	JR	Z,HBS2_FAIL
-	LD	HL,$D0D8
-	LD	(TS_PORTS1),HL
-	LD	DE,TSSTR_RC
-	LD	(TS_DESC1),DE
-	LD	HL,$D0D1
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_RC
-	LD	(TS_DESC2),DE
-	XOR	A
-	RET
-HBS2_FAIL:
-	OR	$FF
-	RET
 ;
 ; Print post-load playback info.
 ; For TurboSound files we suppress the single-chip hardware description.
@@ -3810,7 +1931,7 @@ PRTPLAYINFO:
 	LD	A,(HBIOSMD)
 	OR	A
 	JR	NZ,PRTPIU_TSHB
-	CALL	TS_PORTS_SETUP
+	CALL	TS_PORTS_SETUP_IMPL
 	CALL	PRT_TSPORTS_LINE
 	CALL	PRTWMOD
 	RET
@@ -3866,7 +1987,7 @@ PRTPLAYINFO0:
 	JR	NZ,PRTPI_TSHB
 	;
 	; direct I/O: select ports and print the two-chip ports line
-	CALL	TS_PORTS_SETUP
+	CALL	TS_PORTS_SETUP_IMPL
 	CALL	PRT_TSPORTS_LINE
 	CALL	PRTWMOD
 	LD	A,$FF
@@ -3923,894 +2044,8 @@ PRT_TSPORTS_LINE:
 	LD	DE,MSGTSPST
 	JP	PRTSTR
 
-;
-; Detect VGM chip usage from the actual command stream.
-; Sets VGMCHIPFLG bits:
-;   bit 0: OPL2 (YM3812)
-;   bit 1: OPL3 (YMF262)
-;   bit 2: AY-3-8910 / YM2149
-;   bit 3: SN76489
-;   bit 4: YM2151 (OPM)
-;
-VGM_DETECT_HW:
-	XOR	A
-	LD	(VGMCHIPFLG),A
-	LD	(VGMDUALFLG),A
-	LD	HL,(vgmdata + 34H)
-	LD	A,H
-	OR	L
-	JR	NZ,VGM_DET_OFS
-	LD	HL,0CH
-VGM_DET_OFS:
-	LD	DE,vgmdata + 34H
-	ADD	HL,DE
-VGM_DET_LP:
-	LD	A,(HL)
-	INC	HL
-	CP	66H
-	JP	Z,VGM_DET_DONE
-	CP	4FH
-	JR	Z,VGM_DET_S1
-	CP	50H
-	JR	Z,VGM_DET_SN1
-	CP	30H
-	JR	Z,VGM_DET_SN2
-	CP	5AH
-	JR	Z,VGM_DET_OPL2
-	CP	5EH
-	JR	Z,VGM_DET_OPL31
-	CP	5FH
-	JR	Z,VGM_DET_OPL32
-	CP	0A0H
-	JR	Z,VGM_DET_AY
-	CP	054H
-	JR	Z,VGM_DET_2151
-	CP	0A4H
-	JR	Z,VGM_DET_21512
-	CP	61H
-	JR	Z,VGM_DET_S2
-	CP	62H
-	JP	Z,VGM_DET_LP
-	CP	63H
-	JP	Z,VGM_DET_LP
-	CP	70H
-	JP	NC,VGM_DET_WAIT
-	JP	VGM_DET_SKIP
-VGM_DET_WAIT:
-	CP	80H
-	JP	C,VGM_DET_LP
-	JP	VGM_DET_SKIP
-VGM_DET_S1:
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_S2:
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_SN1:
-	LD	A,(VGMCHIPFLG)
-	OR	00001000B
-	LD	(VGMCHIPFLG),A
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_SN2:
-	LD	A,(VGMCHIPFLG)
-	OR	00001000B
-	LD	(VGMCHIPFLG),A
-	LD	A,(VGMDUALFLG)
-	OR	00001000B
-	LD	(VGMDUALFLG),A
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_OPL2:
-	LD	A,(VGMCHIPFLG)
-	OR	00000001B
-	LD	(VGMCHIPFLG),A
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_OPL31:
-VGM_DET_OPL32:
-	LD	A,(VGMCHIPFLG)
-	OR	00000010B
-	LD	(VGMCHIPFLG),A
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_AY:
-	LD	A,(VGMCHIPFLG)
-	OR	00000100B
-	LD	(VGMCHIPFLG),A
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_2151:
-VGM_DET_21512:
-	LD	A,(VGMCHIPFLG)
-	OR	00010000B
-	LD	(VGMCHIPFLG),A
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_DONE:
-	RET
-
-VGM_DET_SKIP:
-	CP	67H
-	JR	Z,VGM_DET_SKIP67
-	CP	68H
-	JR	Z,VGM_DET_SKIP68
-	CP	0E0H
-	JR	Z,VGM_DET_SKIP4
-	CP	0C0H
-	JP	NC,VGM_DET_SKIP3
-	CP	0B0H
-	JP	NC,VGM_DET_SKIP2
-	CP	0A1H
-	JP	NC,VGM_DET_SKIP2
-	CP	90H
-	JR	C,VGM_DET_SKIPR
-	CP	96H
-	JR	C,VGM_DET_SKIP4
-	JP	VGM_DET_SKIP1
-VGM_DET_SKIPR:
-	CP	50H
-	JP	NC,VGM_DET_SKIP2
-	CP	40H
-	JP	NC,VGM_DET_SKIP1
-	CP	30H
-	JP	NC,VGM_DET_SKIP1
-	JP	VGM_DET_SKIP1
-VGM_DET_SKIP1:
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_SKIP2:
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_SKIP3:
-	INC	HL
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_SKIP4:
-	INC	HL
-	INC	HL
-	INC	HL
-	INC	HL
-	JP	VGM_DET_LP
-VGM_DET_SKIP68:
-	LD	DE,12
-	ADD	HL,DE
-	JP	VGM_DET_LP
-VGM_DET_SKIP67:
-	INC	HL
-	INC	HL
-	LD	E,(HL)
-	INC	HL
-	LD	D,(HL)
-	INC	HL
-	LD	A,(HL)
-	INC	HL
-	LD	C,(HL)
-	INC	HL
-	ADD	HL,DE
-	LD	A,C
-	OR	A
-	JP	Z,VGM_DET_LP
-VGM_DET_SKIP67P:
-	LD	A,H
-	ADD	A,C
-	LD	H,A
-	DEC	C
-	JR	NZ,VGM_DET_SKIP67P
-	JP	VGM_DET_LP
-
-; Print VGM hardware line after MSGTSPRE, listing detected chips.
-PRT_VGMHW_LINE:
-	LD	DE,MSGTSPRE
-	CALL	PRTSTR
-	XOR	A
-	LD	(VGMPRNSEP),A
-	LD	A,(VGMCHIPFLG)
-	OR	A
-	JR	NZ,PRT_VGMHW0
-	LD	DE,MSGVGMUNK
-	JP	PRTSTR
-PRT_VGMHW0:
-	; A still valid from LD A,(VGMCHIPFLG) above
-	BIT	1,A
-	JR	Z,PRT_VGMHW1
-	LD	DE,MSGVGMOPL3
-	CALL	PRT_VGM_TOKEN
-PRT_VGMHW1:
-	LD	A,(VGMCHIPFLG)		; reload: A clobbered by PRT_VGM_TOKEN
-	BIT	0,A
-	JR	Z,PRT_VGMHW2
-	LD	DE,MSGVGMOPL2
-	CALL	PRT_VGM_TOKEN
-PRT_VGMHW2:
-	LD	A,(VGMCHIPFLG)
-	BIT	2,A
-	JR	Z,PRT_VGMHW3
-	LD	DE,MSGVGMAY
-	CALL	PRT_VGM_TOKEN
-PRT_VGMHW3:
-	LD	A,(VGMCHIPFLG)
-	BIT	4,A
-	JR	Z,PRT_VGMHWPSG
-	LD	DE,MSGVGM2151
-	CALL	PRT_VGM_TOKEN
-PRT_VGMHWPSG:
-	LD	A,(VGMCHIPFLG)
-	BIT	3,A
-	JR	Z,PRT_VGMHW4
-	LD	A,(VGMDUALFLG)
-	BIT	3,A
-	JR	Z,PRT_VGMHWPSG1
-	LD	DE,MSGVGMPSG2
-	CALL	PRT_VGM_TOKEN
-	JR	PRT_VGMHW4
-PRT_VGMHWPSG1:
-	LD	DE,MSGVGMPSG
-	CALL	PRT_VGM_TOKEN
-PRT_VGMHW4:
-	RET
-
-; DE -> token string, prints with comma separator when needed.
-PRT_VGM_TOKEN:
-	PUSH	DE
-	LD	A,(VGMPRNSEP)
-	OR	A
-	JR	Z,PRT_VGM_TOKEN0
-	LD	DE,MSGVGMCOM
-	CALL	PRTSTR
-PRT_VGM_TOKEN0:
-	POP	DE
-	CALL	PRTSTR
-	LD	A,$FF
-	LD	(VGMPRNSEP),A
-	RET
-
-; Setup VGM frame delay from RomWBW CPU index using the same table/dither
-; scheme as the reference VGMPlay implementation.
-; Input: A = CPU index/code from HBIOS SYSGET/CPUINFO.
-VGM_SETFDELAY:
-	PUSH	AF
-	LD	HL,VGMCLKTBL-1
-	ADD	A,L
-	LD	L,A
-	ADC	A,H
-	SUB	L
-	LD	H,A
-	LD	A,(HL)
-	OR	A
-	JR	NZ,VGM_SETFDELAY0
-	LD	A,10			; safe default for 7MHz-class systems
-VGM_SETFDELAY0:
-	LD	(vgmfdly0),A
-	LD	(vgmfdly),A
-	XOR	A
-	LD	(vgmfdpos),A
-	LD	(vgmfdlo),A
-	LD	(vgmfdcyc),A
-	POP	AF
-	LD	A,(vgmfdly0)
-	LD	B,A
-	CP	10
-	JR	NZ,VGM_SETFD11
-	LD	A,25
-	LD	(vgmfdcyc),A
-	LD	A,7
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD11:
-	LD	A,B
-	CP	11
-	JR	NZ,VGM_SETFD14
-	LD	A,4
-	LD	(vgmfdcyc),A
-	LD	A,1
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD14:
-	LD	A,B
-	CP	14
-	JR	NZ,VGM_SETFD15
-	LD	A,3
-	LD	(vgmfdcyc),A
-	LD	A,1
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD15:
-	LD	A,B
-	CP	15
-	JR	NZ,VGM_SETFD16
-	LD	A,20
-	LD	(vgmfdcyc),A
-	LD	A,7
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD16:
-	LD	A,B
-	CP	16
-	JR	NZ,VGM_SETFD17
-	LD	A,8
-	LD	(vgmfdcyc),A
-	LD	A,3
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD17:
-	LD	A,B
-	CP	17
-	JR	NZ,VGM_SETFD23
-	LD	A,5
-	LD	(vgmfdcyc),A
-	LD	A,2
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD23:
-	LD	A,B
-	CP	23
-	RET	NZ
-	LD	A,13
-	LD	(vgmfdcyc),A
-	LD	A,7
-	LD	(vgmfdlo),A
-	RET
-;
-;===============================================================================
-; TurboSound-packed PT3 support ("PT3! <off> PT3! <len> 02 TS" footer)
-;===============================================================================
-;
-PT3SIG0	.EQU	'P'
-PT3SIG1	.EQU	'T'
-PT3SIG2	.EQU	'3'
-PT3SIG3	.EQU	'!'
-TSSIG0	.EQU	'T'
-TSSIG1	.EQU	'S'
-;
-; Scan loaded (padded) PT3 data for the TurboSound footer.
-; Sets TSFLAG non-zero and records TS_OFF2/TS_LEN2 if found.
-;
-TS_DETECT:
-	XOR	A
-	LD	(TSFLAG),A
-	LD	HL,(LOADBYTES)
-	LD	DE,16
-	OR	A
-	SBC	HL,DE
-	RET	C
-	LD	B,H
-	LD	C,L			; BC = bytes_to_scan
-	LD	IX,MDLADDR
-TS_DLP:
-	LD	A,(IX+0)
-	CP	PT3SIG0
-	JP	NZ,TS_DNXT
-	LD	A,(IX+1)
-	CP	PT3SIG1
-	JP	NZ,TS_DNXT
-	LD	A,(IX+2)
-	CP	PT3SIG2
-	JP	NZ,TS_DNXT
-	LD	A,(IX+3)
-	CP	PT3SIG3
-	JP	NZ,TS_DNXT
-	; check second PT3! at +6
-	LD	A,(IX+6)
-	CP	PT3SIG0
-	JP	NZ,TS_DNXT
-	LD	A,(IX+7)
-	CP	PT3SIG1
-	JP	NZ,TS_DNXT
-	LD	A,(IX+8)
-	CP	PT3SIG2
-	JP	NZ,TS_DNXT
-	LD	A,(IX+9)
-	CP	PT3SIG3
-	JP	NZ,TS_DNXT
-	; check marker "02TS" at +12
-	LD	A,(IX+12)
-	CP	'0'
-	JP	NZ,TS_DNXT
-	LD	A,(IX+13)
-	CP	'2'
-	JP	NZ,TS_DNXT
-	LD	A,(IX+14)
-	CP	TSSIG0
-	JP	NZ,TS_DNXT
-	LD	A,(IX+15)
-	CP	TSSIG1
-	JP	NZ,TS_DNXT
-	; validate candidate offset equals off2 + len2
-	LD	E,(IX+4)		; DE = off2
-	LD	D,(IX+5)
-	LD	L,(IX+10)		; HL = len2
-	LD	H,(IX+11)
-	ADD	HL,DE			; HL = off2 + len2
-	LD	A,H
-	OR	L
-	JP	Z,TS_DNXT		; reject zero-size relation
-	PUSH	HL			; save off2 + len2
-	PUSH	IX
-	POP	BC			; BC = candidate absolute address
-	LD	H,B
-	LD	L,C			; HL = candidate absolute address
-	LD	DE,MDLADDR
-	OR	A
-	SBC	HL,DE			; HL = candidate file-relative offset
-	EX	DE,HL			; DE = candidate offset
-	POP	HL			; HL = off2 + len2
-	OR	A
-	SBC	HL,DE
-	JP	NZ,TS_DNXT
-	; record module2 offset and length
-	LD	E,(IX+4)
-	LD	D,(IX+5)
-	LD	(TS_OFF2),DE
-	LD	E,(IX+10)
-	LD	D,(IX+11)
-	LD	(TS_LEN2),DE
-	LD	A,$FF
-	LD	(TSFLAG),A
-	RET
-TS_DNXT:
-	INC	IX
-	DEC	BC
-	LD	A,B
-	OR	C
-	JP	NZ,TS_DLP
-	RET
-;
-; Probe for the two AY cards we expect for TurboSound playback.
-; Current implementation uses MSX-style ports (A0/A1/A2) and
-; Coleco-style ports (50/51/52).
-;
-TS_PORTS_SETUP:
-	;
-	; Prefer HBIOS enumeration to find two distinct PSG port sets.
-	;
-	CALL	HB_SND_GET2
-	RET	Z
-	;
-	; Fallback: use current PORTS as chip #1 and pick a different known port set
-	; without relying on readback.
-	;
-	LD	HL,(PORTS)		; HL = chip1 ports (RDAT:RSEL)
-	LD	(TS_PORTS1),HL
-	CALL	TS_DESC_FROM_HL
-	LD	(TS_DESC1),DE
-	;
-	; Choose chip2 by excluding chip1
-	LD	HL,(TS_PORTS1)
-	LD	DE,$5150
-	OR	A
-	SBC	HL,DE
-	JR	Z,TS_FBK2_MSX
-	LD	HL,$5150
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_COLECO
-	LD	(TS_DESC2),DE
-	RET
-TS_FBK2_MSX:
-	LD	HL,$A1A0
-	LD	(TS_PORTS2),HL
-	LD	DE,TSSTR_MSX
-	LD	(TS_DESC2),DE
-	RET
-;
-; Map a ports word in HL (RDAT:RSEL) to a description pointer in DE.
-;
-TS_DESC_FROM_HL:
-	PUSH	HL
-	LD	DE,TSSTR_MSX
-	LD	HL,(TS_PORTS1)		; dummy load to avoid assembler warnings
-	POP	HL
-	LD	DE,TSSTR_MSX
-	LD	BC,$A1A0
-	OR	A
-	SBC	HL,BC
-	RET	Z
-	LD	DE,TSSTR_COLECO
-	ADD	HL,BC			; restore HL
-	LD	BC,$5150
-	OR	A
-	SBC	HL,BC
-	RET	Z
-	LD	DE,TSSTR_RC
-	ADD	HL,BC			; restore HL
-	LD	BC,$D0D8
-	OR	A
-	SBC	HL,BC
-	RET	Z
-	LD	DE,TSSTR_RC
-	RET
-;
-TS_PROBE_MSX:
-	LD	HL,$A1A0
-	PUSH	HL
-	LD	A,$A2
-	CALL	PROBE_AY
-	POP	HL
-	RET	Z
-	; fallback: some boards read back on RSEL
-	PUSH	HL
-	LD	A,$A0
-	CALL	PROBE_AY
-	POP	HL
-	RET
-TS_PROBE_COLECO:
-	LD	HL,$5150
-	PUSH	HL
-	LD	A,$52
-	CALL	PROBE_AY
-	POP	HL
-	RET	Z
-	PUSH	HL
-	LD	A,$50
-	CALL	PROBE_AY
-	POP	HL
-	RET
-TS_PROBE_RC:
-	LD	HL,$D0D8
-	PUSH	HL
-	LD	A,$D8
-	CALL	PROBE_AY
-	POP	HL
-	RET
-;
-; Generic probe for an AY on ports (HL=RDAT:RSEL, A=RIN)
-; Returns Z on success, NZ on failure.
-;
-PROBE_AY:
-	; Probe for an AY/YM PSG on the given ports.
-	;
-	; IMPORTANT: Avoid false positives when no device is present.
-	; Many systems will read back the last value on the data bus ("floating bus"),
-	; which can make naive write-then-read probes succeed.
-	;
-	; Strategy:
-	; - Write two registers with distinct values.
-	; - "Poison" the bus by writing a different value to RSEL before each read.
-	; - Read back *only* from the intended read port:
-	;     - If RIN == RDAT, read from RDAT (2-port designs).
-	;     - Otherwise, read from RIN (dedicated readback at base+2).
-	;
-	DI
-	PUSH	AF			; save RIN in A
-	CALL	SLOWIO
-	POP	AF
-	LD	E,L			; E := RSEL
-	LD	D,H			; D := RDAT
-	LD	L,A			; L := RIN
-	LD	B,0			; ensure 8-bit port addressing via BC
-	;
-	; Write R2 = 55h
-	LD	C,E
-	LD	A,2
-	OUT	(C),A
-	LD	C,D
-	LD	A,$55
-	OUT	(C),A
-	;
-	; Write R3 = AAh
-	LD	C,E
-	LD	A,3
-	OUT	(C),A
-	LD	C,D
-	LD	A,$AA
-	OUT	(C),A
-	;
-	; Decide read port: H := (RIN == RDAT) ? RDAT : RIN
-	LD	A,L
-	CP	D
-	JR	Z,PRBAY_RDAT
-	LD	H,L
-	JR	PRBAY_RSEL2
-PRBAY_RDAT:
-	LD	H,D
-	;
-	; Read R2, expect 55h
-PRBAY_RSEL2:
-	LD	C,E
-	LD	A,0			; poison bus (and selection)
-	OUT	(C),A
-	LD	A,2
-	OUT	(C),A
-	LD	C,H
-	IN	A,(C)
-	CP	$55
-	JR	NZ,PRBAY_FAIL
-	;
-	; Read R3, expect AAh
-	LD	C,E
-	LD	A,0			; poison bus
-	OUT	(C),A
-	LD	A,3
-	OUT	(C),A
-	LD	C,H
-	IN	A,(C)
-	CP	$AA
-	JR	NZ,PRBAY_FAIL
-	;
-	CALL	NORMIO
-	EI
-	XOR	A			; success, Z set
-	RET
-PRBAY_FAIL:
-	CALL	NORMIO
-	EI
-	OR	$FF			; failure, NZ set
-	RET
-;
-; Initialize both packed PT3 modules as independent instances.
-;
-TS_INIT:
-	; save a pristine template of the player state
-	LD	HL,TS_CTXTMPL_VARS
-	LD	(CTX_VPTR),HL
-	LD	HL,TS_CTXTMPL_PATCH
-	LD	(CTX_PPTR),HL
-	CALL	CTX_SAVE
-	; init instance 1 @ MDLADDR on chip 1
-	CALL	TS_SETPORTS1
-	CALL	TS_LOAD_TMPL
-	LD	HL,MDLADDR
-	CALL	INIT
-	CALL	TS_SAVE_CTX1
-	LD	A,(SETUP)
-	LD	(TSSET1),A
-	; init instance 2 @ MDLADDR+TS_OFF2 on chip 2
-	CALL	TS_SETPORTS2
-	CALL	TS_LOAD_TMPL
-	LD	HL,MDLADDR
-	LD	DE,(TS_OFF2)
-	ADD	HL,DE
-	CALL	INIT
-	CALL	TS_SAVE_CTX2
-	LD	A,(SETUP)
-	LD	(TSSET2),A
-	RET
-;
-; Play one quark on both instances.
-;
-TS_PLAYQUARK:
-	CALL	TS_LOAD_CTX1
-	CALL	TS_SETPORTS1
-	CALL	PLAY
-	LD	A,(SETUP)
-	LD	(TSSET1),A
-	CALL	TS_SAVE_CTX1
-	CALL	TS_LOAD_CTX2
-	CALL	TS_SETPORTS2
-	CALL	PLAY
-	LD	A,(SETUP)
-	LD	(TSSET2),A
-	CALL	TS_SAVE_CTX2
-	RET
-;
-; Mute both chips.
-;
-TS_MUTE:
-	CALL	TS_LOAD_CTX1
-	CALL	TS_SETPORTS1
-	CALL	MUTE
-	CALL	TS_SAVE_CTX1
-	CALL	TS_LOAD_CTX2
-	CALL	TS_SETPORTS2
-	CALL	MUTE
-	CALL	TS_SAVE_CTX2
-	RET
-;
-; Adjust timing in delay mode to compensate for extra TS work.
-; In timer mode, the timer gate already keeps playback on tempo.
-;
-TS_ADJTIM:
-	LD	A,(WMOD)		; timer mode?
-	OR	A
-	RET	NZ			; if timer mode, no adjustment
-	;
-	; Tune delay for TS (empirically): QDLY := QDLY * 97 / 128
-	; This is 3/4 (96/128) plus 1/128.
-	;
-	LD	HL,(QDLY)		; base delay count
-	LD	B,H
-	LD	C,L			; BC = base
-	;
-	; DE = base/4
-	LD	H,B
-	LD	L,C
-	SRL	H
-	RR	L
-	SRL	H
-	RR	L
-	EX	DE,HL
-	;
-	; HL = 3/4 base
-	LD	H,B
-	LD	L,C
-	OR	A			; clear carry
-	SBC	HL,DE
-	;
-	; HL = 3/4 base + base/128
-	PUSH	HL			; save 3/4 base
-	LD	H,B
-	LD	L,C
-	LD	A,7
-TS_ADJ2:
-	SRL	H
-	RR	L
-	DEC	A
-	JR	NZ,TS_ADJ2		; HL = base/128
-	POP	DE
-	ADD	HL,DE
-	LD	(QDLY),HL
-	RET
-TS_SETPORTS1:
-	LD	HL,(TS_PORTS1)
-	LD	(PORTS),HL
-	RET
-TS_SETPORTS2:
-	LD	HL,(TS_PORTS2)
-	LD	(PORTS),HL
-	RET
-;
-; Context save/restore helpers
-;
-TS_LOAD_TMPL:
-	LD	HL,TS_CTXTMPL_VARS
-	LD	(CTX_VPTR),HL
-	LD	HL,TS_CTXTMPL_PATCH
-	LD	(CTX_PPTR),HL
-	JP	CTX_LOAD
-TS_SAVE_CTX1:
-	LD	HL,TS_CTX1_VARS
-	LD	(CTX_VPTR),HL
-	LD	HL,TS_CTX1_PATCH
-	LD	(CTX_PPTR),HL
-	JP	CTX_SAVE
-TS_LOAD_CTX1:
-	LD	HL,TS_CTX1_VARS
-	LD	(CTX_VPTR),HL
-	LD	HL,TS_CTX1_PATCH
-	LD	(CTX_PPTR),HL
-	JP	CTX_LOAD
-TS_SAVE_CTX2:
-	LD	HL,TS_CTX2_VARS
-	LD	(CTX_VPTR),HL
-	LD	HL,TS_CTX2_PATCH
-	LD	(CTX_PPTR),HL
-	JP	CTX_SAVE
-TS_LOAD_CTX2:
-	LD	HL,TS_CTX2_VARS
-	LD	(CTX_VPTR),HL
-	LD	HL,TS_CTX2_PATCH
-	LD	(CTX_PPTR),HL
-	JP	CTX_LOAD
-;
-; Save/restore the Bulba player state (heap vars + self-modified bytes).
-;
-PTX_PATCHSZ	.EQU	52
-;
-PTX_PATCHTBL:
-	; addr, len
-	.DW	SETUP				; setup byte (loop status bit 7)
-	.DB	1
-	.DW	PTDECOD+1
-	.DB	2
-	.DW	PsCalc
-	.DB	2
-	.DW	PDSP_+1
-	.DB	2
-	.DW	PSP_+1
-	.DB	2
-	.DW	CSP_+1
-	.DB	2
-	.DW	L3
-	.DB	1
-	.DW	M2
-	.DB	1
-	.DW	OrnCP
-	.DB	1
-	.DW	OrnLD
-	.DB	1
-	.DW	SamClc2
-	.DB	1
-	.DW	SamCP
-	.DB	1
-	.DW	SamLD
-	.DB	1
-	.DW	SamCnv
-	.DB	2
-	.DW	PrNote+1
-	.DB	1
-	.DW	PrSlide+1
-	.DB	2
-	.DW	Version
-	.DB	1
-	.DW	LoStep
-	.DB	1
-	.DW	OrnPtrs
-	.DB	2
-	.DW	MDADDR2
-	.DB	2
-	.DW	SamPtrs
-	.DB	2
-	.DW	MDADDR1
-	.DB	2
-	.DW	AdInPtA
-	.DB	2
-	.DW	CrPsPtr
-	.DB	2
-	.DW	LPosPtr
-	.DB	2
-	.DW	PatsPtr
-	.DB	2
-	.DW	MODADDR
-	.DB	2
-	.DW	AdInPtB
-	.DB	2
-	.DW	AdInPtC
-	.DB	2
-	.DW	Delay
-	.DB	1
-	.DW	AddToEn
-	.DB	1
-	.DW	Env_Del
-	.DB	1
-	.DW	ESldAdd
-	.DB	2
-	.DW	$FFFF
-	.DB	0
-;
-CTX_SAVE:
-	LD	HL,VARS
-	LD	DE,(CTX_VPTR)
-	LD	BC,PTX_CTXSIZ
-	LDIR
-	LD	IX,PTX_PATCHTBL
-	LD	DE,(CTX_PPTR)
-CTX_SLP:
-	LD	L,(IX+0)
-	LD	H,(IX+1)
-	LD	A,H
-	CP	$FF
-	JR	NZ,CTX_SHAVE
-	LD	A,L
-	CP	$FF
-	RET	Z
-CTX_SHAVE:
-	LD	C,(IX+2)
-	LD	B,0
-	LDIR
-	LD	BC,3
-	ADD	IX,BC
-	JR	CTX_SLP
-;
-CTX_LOAD:
-	LD	HL,(CTX_VPTR)
-	LD	DE,VARS
-	LD	BC,PTX_CTXSIZ
-	LDIR
-	LD	IX,PTX_PATCHTBL
-	LD	HL,(CTX_PPTR)
-CTX_LLP:
-	LD	E,(IX+0)
-	LD	D,(IX+1)
-	LD	A,D
-	CP	$FF
-	JR	NZ,CTX_LHAVE
-	LD	A,E
-	CP	$FF
-	RET	Z
-CTX_LHAVE:
-	LD	C,(IX+2)
-	LD	B,0
-	LDIR
-	LD	BC,3
-	ADD	IX,BC
-	JR	CTX_LLP
+#include "vgm_hw.inc"
+#include "ts_runtime.inc"
 ;
 ; Identify active BIOS.  RomWBW HBIOS=1, UNA UBIOS=2, else 0
 ;
@@ -5013,12 +2248,10 @@ PLAYLIST_ERR_STATUS:
 	POP	AF
 	RET
 ;
-CFGTBL:	;	PLT	RSEL	RDAT	RIN	Z180	ACR	ACRVAL
+CFGTBL:	;		PLT		RSEL	RDAT	RIN		Z180	ACR	ACRVAL
 ;	; DESC
 	.DB	$01,	$9A,	$9B,	$9A,	$FF,	$9C,	$FF	; SBC W/ SCG
 	.DW	HWSTR_SCG
-;
-CFGSIZ	.EQU	$ - CFGTBL
 ;
 	.DB	$04,	$9C,	$9D,	$9C,	$40,	$FF,	$FF	; N8 W/ ONBOARD PSG
 	.DW	HWSTR_N8
@@ -5101,29 +2334,31 @@ CFGSIZ	.EQU	$ - CFGTBL
 	.DB	$0B,	$50,	$51,	$52,	$FF,	$FF,	$FF	; RCZ280 W/ RC SOUND MODULE (COLECO)
 	.DW	HWSTR_COLECO
 ;
-	.DB	13,	$A0,	$A1,	$A0,	$FF,	$A2,	$FE	; MBC
+	.DB	13,		$A0,	$A1,	$A0,	$FF,	$A2,	$FE	; MBC
 	.DW	HWSTR_MBC
 ;
-	.DB	17,	$A4,	$A5,	$A4,	$FF,	$A6,	$FE	; DUODYNE
+	.DB	17,		$A4,	$A5,	$A4,	$FF,	$A6,	$FE	; DUODYNE
 	.DW	HWSTR_DUO
 ;
-	.DB	18,	$A0,	$A1,	$A2,	$FF,	$FF,	$FF	; HEATH H8
+	.DB	18,		$A0,	$A1,	$A2,	$FF,	$FF,	$FF	; HEATH H8
 	.DW	HWSTR_HEATH
 ;
-	.DB	22,	$41,	$40,	$40,	$FF,	$FF,	$FF	; NABU
+	.DB	22,		$41,	$40,	$40,	$FF,	$FF,	$FF	; NABU
 	.DW	HWSTR_NABU
 ;
-	.DB	27,	$D8,	$D0,	$D8,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (EB)
+	.DB	27,		$D8,	$D0,	$D8,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (EB)
 	.DW	HWSTR_RCEB
 ;
-	.DB	27,	$A0,	$A1,	$A2,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (MSX)
+	.DB	27,		$A0,	$A1,	$A2,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (MSX)
 	.DW	HWSTR_RCMSX
 ;
-	.DB	27,	$D1,	$D0,	$D0,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (MF)
+	.DB	27,		$D1,	$D0,	$D0,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (MF)
 	.DW	HWSTR_RCMF
 ;
-	.DB	27,	$50,	$51,	$52,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (COLECO)
+	.DB	27,		$50,	$51,	$52,	$FF,	$FF,	$FF	; RC2014 W/ RC SOUND MODULE (COLECO)
 	.DW	HWSTR_COLECO
+;
+CFGSIZ	.EQU	9			; 7 DB fields + 1 DW description pointer
 ;
 	.DB	$FF					; END OF TABLE MARKER
 ;
@@ -5204,6 +2439,7 @@ HBIOSMD		.DB	0	; NON-ZERO IF USING HBIOS SOUND DRIVER, ZERO OTHERWISE
 DELAYMD		.DB	0	; FORCE DELAY MODE IF TRUE (NON-ZERO)
 OCTAVEADJ	.DB	0	; AMOUNT TO ADJUST OCTAVE UP OR DOWN
 CONFIGMD	.DB	0	; NON-ZERO TO ENTER TERM.CFG EDIT MODE
+CREDMD		.DB	0	; NON-ZERO TO PRINT CREDITS AND EXIT
 ALLMD		.DB	0	; NON-ZERO TO ENUMERATE/PLAY ALL SUPPORTED FILES
 LOOPTRKMD	.DB	0	; NON-ZERO TO LOOP CURRENT TRACK
 LOOPPLMD	.DB	0	; NON-ZERO TO LOOP WHOLE PLAYLIST
@@ -5243,8 +2479,11 @@ PLAYLIST0	.FILL	(PLMAX * 12),0	; SNAPSHOT OF ORIGINAL PLAYLIST ENTRIES
 SNGFCBINI	.DB	0	; NON-ZERO WHEN SINGLE-FILE FCB SNAPSHOT IS INITIALIZED
 SNGFCBSAV	.FILL	36,0		; SAVED STARTUP FCB FOR SINGLE-FILE LOOP RESTART
 PLSRCHBUF	.FILL	128,0		; DMA BUFFER FOR DIR SEARCH
+METATITLE	.EQU	PLSRCHBUF
+METAARTIST	.EQU	PLSRCHBUF+$20
 PLSRCHFCB	.FILL	36,0		; SEARCH FCB FOR PLAYLIST ENUM PATTERN
 CLIBUF		.FILL	129,0		; NUL-TERMINATED COPY OF COMMAND TAIL
+CLITOK		.FILL	13,0		; WORK BUFFER FOR FCB/TAIL TOKEN RECONCILIATION
 
 USEPORTS	.DB	0	; AUDIO CHIP PORT SELECTION MODE
 ;
@@ -5261,7 +2500,7 @@ YM2151DAT	.EQU	0DFH	; YM2151 data write (primary)
 YM2151SEL2	.EQU	000H	; YM2151 register select (secondary, undefined on RCBUS)
 YM2151DAT2	.EQU	000H	; YM2151 data write (secondary, undefined on RCBUS)
 
-MSGBAN		.DB	"VibeTune Player for RomWBW v0.1b001, 10-Apr-2026",0
+MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b070, 11-Apr-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
@@ -5272,11 +2511,10 @@ MSGVGMAY	.DB	"AY-3-8910/YM2149",0
 MSGVGMPSG	.DB	"SN76489",0
 MSGVGMPSG2	.DB	"2xSN76489",0
 MSGVGM2151	.DB	"YM2151/OPM",0
-
-MSGUSE		.DB	"Copyright (C) 2026, Wayne Warthen, GNU GPL v3",13,10
+MSGUSE		.DB	"Usage: VTUNE <filename>.[PT2|PT3|MYM|VGM] [-msx|-rc|-coleco] [-delay] [--hbios] [+tn|-tn] [-list] [-loop] [-config] [-credits]",0
+MSGCRED		.DB	"Copyright (C) 2026, Wayne Warthen, GNU GPL v3",13,10
 			.DB	"PTxPlayer Copyright (C) 2004-2007 S.V.Bulba",13,10
-			.DB	"MYMPlay by Marq/Lieves!Tuore",13,10,13,10
-			.DB	"Usage: TUNE <filename>.[PT2|PT3|MYM|VGM] [-msx|-rc|-coleco] [-delay] [--hbios] [+tn|-tn] [-list] [-loop] [-config]",0
+			.DB	"MYMPlay by Marq/Lieves!Tuore",0
 MSGBIO		.DB	"Incompatible BIOS or version, "
 			.DB	"HBIOS v", '0' + RMJ, ".", '0' + RMN, " required",0
 MSGPLT		.DB	"Hardware error, system not supported!",0
@@ -7588,8 +4826,30 @@ VGM_GD3_PLX:
 	LD	A,(TMP)
 	RET
 ;
-; Print song metadata from currently loaded module.
+; Snapshot song metadata once per track load for stable redraw output.
 ;
+META_SNAPSHOT:
+	LD	HL,MDLADDR + $1E
+	LD	DE,METATITLE
+	LD	B,$20
+METASNAP1:
+	LD	A,(HL)
+	LD	(DE),A
+	INC	HL
+	INC	DE
+	DJNZ	METASNAP1
+	LD	HL,MDLADDR + $42
+	LD	DE,METAARTIST
+	LD	B,$20
+METASNAP2:
+	LD	A,(HL)
+	LD	(DE),A
+	INC	HL
+	INC	DE
+	DJNZ	METASNAP2
+	RET
+
+; Print song metadata from current track snapshot.
 PRTSONGMETA:
 	LD	A,(UI_ACTIVE)
 	OR	A
@@ -7604,7 +4864,7 @@ PRTSONGMETA:
 	CALL	TCFG_ANSI_AT
 	LD	DE,MSGSONGNAME
 	CALL	PRTSTR
-	LD	DE,MDLADDR + $1E
+	LD	DE,METATITLE
 	LD	B,$20
 PRTSM1U:
 	LD	A,(DE)
@@ -7616,7 +4876,7 @@ PRTSM1U:
 	CALL	TCFG_ANSI_AT
 	LD	DE,MSGARTIST
 	CALL	PRTSTR
-	LD	DE,MDLADDR + $42
+	LD	DE,METAARTIST
 	LD	B,$20
 PRTSM2U:
 	LD	A,(DE)
@@ -7627,7 +4887,7 @@ PRTSM2U:
 PRTSONGMETA0:
 	LD	DE, MSGSONGNAME
 	CALL	PRTSTR
-	LD	DE, MDLADDR + $1E
+	LD	DE, METATITLE
 	LD	B, $20
 PRTSM1:
 	LD	A,(DE)
@@ -7637,7 +4897,7 @@ PRTSM1:
 	CALL	CRLF
 	LD	DE, MSGARTIST
 	CALL	PRTSTR
-	LD	DE, MDLADDR + $42
+	LD	DE, METAARTIST
 	LD	B, $20
 PRTSM2:
 	LD	A,(DE)
@@ -8182,3 +5442,21 @@ data:
 ;
 ;===============================================================================
 	.END
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
