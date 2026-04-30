@@ -34,12 +34,12 @@ PSG_RCMF_RIN	.EQU	0D0H
 ;=============================================================================
 
 ; YM2151 Primary Mapping (board at 0xFF-0x20 range)
-YM2151_PRIMARY_SEL	.EQU	0DEH	; register select
-YM2151_PRIMARY_DAT	.EQU	0DFH	; data write
+YM2151_PRIMARY_SEL		.EQU	0DEH	; register select
+YM2151_PRIMARY_DAT		.EQU	0DFH	; data write
 
 ; YM2151 Alternate Mapping (0xFF-0x20 remapped)
-YM2151_ALT_SEL		.EQU	0FEH	; alternate register select
-YM2151_ALT_DAT		.EQU	0FFH	; alternate data write
+YM2151_ALT_SEL			.EQU	0FEH	; alternate register select
+YM2151_ALT_DAT			.EQU	0FFH	; alternate data write
 
 ; Secondary YM2151 (undefined on RCBUS, reserved for future use)
 YM2151_SECONDARY_SEL	.EQU	000H	; not defined on current hardware
@@ -110,10 +110,10 @@ PSG_NABU_RIN	.EQU	040H
 ; Layout: high byte = RDAT, low byte = RSEL  (matches PORTS memory layout)
 ;=============================================================================
 
-PSG_MSX_PORTW    .EQU    PSG_MSX_RDAT * 256 + PSG_MSX_RSEL    ; $A1A0
-PSG_COLECO_PORTW .EQU    PSG_COLECO_RDAT * 256 + PSG_COLECO_RSEL ; $5150
-PSG_RCEB_PORTW   .EQU    PSG_RCEB_RDAT * 256 + PSG_RCEB_RSEL  ; $D0D8
-PSG_RCMF_PORTW   .EQU    PSG_RCMF_RDAT * 256 + PSG_RCMF_RSEL  ; $D0D1
+PSG_MSX_PORTW    .EQU    PSG_MSX_RDAT * 256 + PSG_MSX_RSEL          ; $A1A0 (MSX standard)
+PSG_COLECO_PORTW .EQU    PSG_COLECO_RDAT * 256 + PSG_COLECO_RSEL    ; $5150 (Coleco standard)
+PSG_RCEB_PORTW   .EQU    PSG_RCEB_RDAT * 256 + PSG_RCEB_RSEL        ; $D0D8 (RC2014/EB6)
+PSG_RCMF_PORTW   .EQU    PSG_RCMF_RDAT * 256 + PSG_RCMF_RSEL        ; $D0D1 (RC2014/MF)
 
 ;=============================================================================
 ; Z180 Wait-State Register Base Port (CFGTBL field 5)

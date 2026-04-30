@@ -79,7 +79,7 @@
 #include	"hbios.inc"
 #include	"cpm.inc"
 #include	"vibetune.inc"
-#include	"ports.cfg"
+#include	"ports.inc"
 ;
 ; Local hbios.inc is minimal; define additional equates we need here.
 BF_SYSGET_SNDCNT	.EQU	$50		; SYSGET subfunction: sound unit count
@@ -157,7 +157,7 @@ CurPosCounter	.EQU	0	; 2) Current position counter at (START+11)
 ACBBAC			.EQU	0	; 3) Allow channels allocation bits at (START+10)
 LoopChecker		.EQU	1	; 4) Allow loop checking and disabling
 Id				.EQU	1	; 5) Insert official identificator
-#DEFINE Release "1b001"		; Release number
+#DEFINE Release "1b002"		; Release number
 
 	.ORG	$0100
 ;
