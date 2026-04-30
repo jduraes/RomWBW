@@ -157,7 +157,7 @@ CurPosCounter	.EQU	0	; 2) Current position counter at (START+11)
 ACBBAC			.EQU	0	; 3) Allow channels allocation bits at (START+10)
 LoopChecker		.EQU	1	; 4) Allow loop checking and disabling
 Id				.EQU	1	; 5) Insert official identificator
-#DEFINE Release "1b002"		; Release number
+#DEFINE Release "1b001"		; Release number
 
 	.ORG	$0100
 ;
@@ -2463,7 +2463,7 @@ YM2151DAT	.EQU	YM2151_PRIMARY_DAT	; YM2151 data write (primary)
 YM2151SEL2	.EQU	YM2151_SECONDARY_SEL	; YM2151 register select (secondary, undefined on RCBUS)
 YM2151DAT2	.EQU	YM2151_SECONDARY_DAT	; YM2151 data write (secondary, undefined on RCBUS)
 
-MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b073, 25-Apr-2026",0
+MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b074, 25-Apr-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
