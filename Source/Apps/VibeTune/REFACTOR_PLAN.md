@@ -1245,6 +1245,31 @@ Notes:
   - `v0.1b072` -> `v0.1b073`
 - Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors), user tested
 - Size note: `vtune.com` 19,718 bytes (-10; 10x `LD L/H` pairs -> `LD HL`)
+
+2026-04-30 - Maintenance sync: ports include rename + visible build bump (b074)
+- Renamed VibeTune ports constants include:
+  - `ports.cfg` -> `ports.inc`
+- Updated `vibetune.asm` include accordingly:
+  - `#include "ports.cfg"` -> `#include "ports.inc"`
+- Bumped VibeTune banner build number:
+  - `v0.1b073` -> `v0.1b074`
+- Validation: VibeTune build artifact refreshed (`vtune.com` updated in commit)
+
+2026-05-10 - Phase 4 slice 48 completed (metadata/display extraction + prefetch cleanup)
+- Added new module file: `meta_print.inc`
+- Moved metadata/display routines from `vibetune.asm` into `meta_print.inc`:
+  - `PRTPLAYINFO`
+  - `PRT_TSPORTS_LINE`
+  - `META_SNAPSHOT`
+  - `PRTSONGMETA`
+- Included `meta_print.inc` in `vibetune.asm` and removed in-place duplicates
+- Removed no-op playlist prefetch hook:
+  - removed call-site comment/hook near `_LDX0` load flow
+  - removed dead `PREFETCH_TRACKS` stub
+- Bumped VibeTune banner build number:
+  - `v0.1b074` -> `v0.1b075`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note: `vtune.com` 19,708 bytes (-10 from b073 checkpoint 19,718)
 ---
 This document is the governing blueprint for the VibeTune refactor effort. Keep it updated as each phase completes.
 
