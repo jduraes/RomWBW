@@ -2312,7 +2312,7 @@ YM2151DAT	.EQU	YM2151_PRIMARY_DAT	; YM2151 data write (primary)
 YM2151SEL2	.EQU	YM2151_SECONDARY_SEL	; YM2151 register select (secondary, undefined on RCBUS)
 YM2151DAT2	.EQU	YM2151_SECONDARY_DAT	; YM2151 data write (secondary, undefined on RCBUS)
 
-MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b075, 10-May-2026",0
+MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b077, 10-May-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
@@ -2326,7 +2326,9 @@ MSGVGM2151	.DB	"YM2151/OPM",0
 MSGUSE		.DB	"Usage: VTUNE <filename>.[PT2|PT3|MYM|VGM] [-msx|-rc|-coleco] [-delay] [--hbios] [+tn|-tn] [-list] [-loop] [-config] [-credits]",0
 MSGCRED		.DB	"Copyright (C) 2026, Wayne Warthen, GNU GPL v3",13,10
 			.DB	"PTxPlayer Copyright (C) 2004-2007 S.V.Bulba",13,10
-			.DB	"MYMPlay by Marq/Lieves!Tuore",0
+			.DB	"MYMPlay by Marq/Lieves!Tuore",13,10
+			.DB	"VGMPLAY code by J.B. Langston, Marco Maccaferri, Ed Brindley",13,10
+			.DB	"TurboSound support, VGM integration and factorisation by Joao Miguel Duraes/fackie",0
 MSGBIO		.DB	"Incompatible BIOS or version, "
 			.DB	"HBIOS v", '0' + RMJ, ".", '0' + RMN, " required",0
 MSGPLT		.DB	"Hardware error, system not supported!",0
