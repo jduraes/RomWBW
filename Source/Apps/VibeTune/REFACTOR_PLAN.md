@@ -1270,6 +1270,153 @@ Notes:
   - `v0.1b074` -> `v0.1b075`
 - Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
 - Size note: `vtune.com` 19,708 bytes (-10 from b073 checkpoint 19,718)
+
+2026-05-10 - Phase 4 slice 49 completed (VGM metadata helper extraction)
+- Moved VGM metadata/helper routines from `vibetune.asm` into `meta_print.inc`:
+  - `PRTFCB83`
+  - `PRTVGMMETA`
+  - `VGM_GD3_FIELD_HAS_TEXT`
+  - `VGM_GD3_INIT`
+  - `VGM_GD3_SKIP_FIELD`
+  - `VGM_GD3_PRINT_FIELD`
+- Kept extraction include-in-place (`#include "meta_print.inc"`) to preserve
+  labels and behavior
+- Bumped VibeTune banner build number:
+  - `v0.1b077` -> `v0.1b078`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note: `vtune.com` 19,854 bytes (unchanged in this slice)
+
+2026-05-10 - Phase 4 slice 50 completed (playlist status/delete helper extraction)
+- Moved playlist UI/status/delete helpers from `vibetune.asm` into
+  `playlist_core.inc`:
+  - `SHOWPLSTATUS`
+  - `SHOWLOOPSTATUS`
+  - `LOOP_STATUS_POST`
+  - `PLAYLIST_DELSEQ_RESET`
+  - `PLAYLIST_DELSEQ_CHECK`
+  - `PLAYLIST_CONFIRM_DELETE`
+  - `PLAYLIST_DELETE_SELECTED`
+  - `PLAYLIST_PRINT_SELECTED_NAME`
+  - `PAUSE_REFRESH_SELECTION`
+  - `MUTE_NOW`
+  - `PRTPLENTRY`
+  - `PRTPLENTRYCUR`
+- Bumped VibeTune banner build number:
+  - `v0.1b078` -> `v0.1b079`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note: `vtune.com` 19,854 bytes (unchanged in this slice)
+
+2026-05-10 - Phase 4 slice 51 completed (timing/input helper extraction)
+- Moved timing/input helper routines from `vibetune.asm` into `timing.inc`:
+  - `GETKEY`
+  - `PRTCPUKHZBAN`
+  - `FLUSHKEYS`
+  - `PRTWMOD`
+- Kept extraction include-in-place (`#include "timing.inc"`) to preserve
+  labels and behavior
+- Bumped VibeTune banner build number:
+  - `v0.1b079` -> `v0.1b080`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note: `vtune.com` 19,854 bytes (unchanged in this slice)
+
+2026-05-10 - Phase 4 slice 52 completed (playlist_core conservative dedupe)
+- In `playlist_core.inc`, introduced small shared internal helpers:
+  - `PLAYLIST_COPY_ENTRIES` for the 12-byte snapshot/restore copy loop
+  - `PLAYLIST_PRINT_NAME83` for shared trimmed 8.3 name/ext rendering
+  - `PLAYLIST_CONFIRM_DELETE_PROMPT` for shared delete-confirm prompt body
+- Simplified duplicate branch tails while preserving behavior:
+  - `PLAYLIST_SET_FILTYP` now uses one shared `FILTYP` store/return tail
+  - `PLAYLIST_CONFIRM_DELETE` now normalizes Y/N input via uppercase compare
+  - `PAUSE_REFRESH_SELECTION` now shares a single `PRTPAUSEMSG` tail
+- Kept intentional ANSI vs plain output split intact (UI row clear/positioning
+  path remains separate from CRLF/plain path)
+- Bumped VibeTune banner build number:
+  - `v0.1b080` -> `v0.1b081`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note: `vtune.com` 19,800 bytes (-54 from prior 19,854)
+
+2026-05-10 - Phase 4 slice 53 completed (MSX-first HBIOS port preference)
+- Updated `hwcfg.inc` auto-config preference policy to keep MSX primary and
+  treat Coleco as secondary/fallback:
+  - `HBSA_PREF` order changed from Coleco-first to MSX-first
+  - preference comments updated to match the new policy
+  - Coleco direct-probe comment clarified as secondary/fallback support
+- Updated dual-PSG pairing order in `HB_SND_GET2`:
+  - first-choice pair is now `MSX + COLECO`
+  - `TS_PORTS1` now receives MSX and `TS_PORTS2` Coleco for that pair
+- Bumped VibeTune banner build number:
+  - `v0.1b081` -> `v0.1b082`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note (before -> after):
+  - `vtune.com` 19,800 -> 19,800 (delta 0)
+  - `vtunemsx.com` 19,677 -> 19,677 (delta 0)
+  - `vtunezx.com` 19,681 -> 19,681 (delta 0)
+2026-05-10 - Phase 4 slice 54 completed (hwcfg conservative dedupe)
+- Consolidated repeated single-card apply blocks in `hwcfg.inc`:
+  - introduced shared `HBSA_APPLY` path for `RSEL/RDAT/RIN` + description write
+  - routed `HBSA_DO_MSX/COLECO/RCEB/RCMF` through shared apply path
+  - preserved RC2014 MSX description behavior via `HBSA_DO_MSX0`
+- Consolidated repeated dual-pair commit blocks in `HB_SND_GET2`:
+  - introduced shared `HBS2_SET_PAIR` helper to assign `TS_PORTS1/2` and
+    `TS_DESC1/2`
+  - updated success branches to pass pair arguments and jump to shared helper
+- Bumped VibeTune banner build number:
+  - `v0.1b082` -> `v0.1b083`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note (before -> after):
+  - `vtune.com` 19,800 -> 19,723 (delta -77)
+  - `vtunemsx.com` 19,677 -> 19,600 (delta -77)
+  - `vtunezx.com` 19,681 -> 19,604 (delta -77)
+
+2026-05-10 - Phase 4 slice 55 completed (hwcfg conservative dedupe 3/4)
+- Consolidated duplicated YM2151 runtime port-map writes in `hwcfg.inc`:
+  - merged `YM2151_PORTCFG` branch bodies into one shared write tail
+  - preserved map behavior (`YM2151MAP=0` -> `DE/DF`, non-zero -> `FE/FF`)
+- Consolidated repeated mask-set blocks in `HB_SND_GETMASK`:
+  - introduced shared `HBGM_SETBIT` path for recognized RSEL mappings
+  - preserved the same mask bits for MSX/Coleco/RC-EB/RC-MF detection
+- Bumped VibeTune banner build number:
+  - `v0.1b083` -> `v0.1b084`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note (before -> after):
+  - `vtune.com` 19,723 -> 19,694 (delta -29)
+  - `vtunemsx.com` 19,600 -> 19,571 (delta -29)
+  - `vtunezx.com` 19,604 -> 19,575 (delta -29)
+
+2026-05-10 - Phase 4 slice 56 completed (hwcfg conservative dedupe 4/4)
+- Consolidated remaining low-risk duplicated tails in `hwcfg.inc`:
+  - `HB_SND_GETMASK`: unified recognized/none exits through shared `HBGM_DONE`
+  - `HB_SND_AUTOCFG`: unified success/fail return epilogue through `HBSA_RET`
+  - `TS_PORTS_SETUP_IMPL`: unified chip-2 fallback assignment/store tail while
+    preserving MSX fallback description selection
+- Bumped VibeTune banner build number:
+  - `v0.1b084` -> `v0.1b085`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note (before -> after):
+  - `vtune.com` 19,694 -> 19,670 (delta -24)
+  - `vtunemsx.com` 19,571 -> 19,547 (delta -24)
+  - `vtunezx.com` 19,575 -> 19,551 (delta -24)
+
+2026-05-10 - Phase 5 slice 57 completed (ports/hwcfg normalization + jump trim)
+- Normalized sentinel constant ownership in `ports.inc`:
+  - added `PORT_NONE` as the shared "not present" value
+  - aliased `Z180_NONE`, `ACR_NONE`, and `ACRVAL_NONE` to `PORT_NONE`
+  - aliased `YM2151_SECONDARY_DAT` to `YM2151_SECONDARY_SEL`
+- Reduced remaining cross-file literal drift in `hwcfg.inc`:
+  - replaced `LD A,$FF` with `LD A,PORT_NONE` in `HB_SND_AUTOCFG`
+  - updated Coleco probe comment to refer to `PSG_COLECO_*` constants
+- Trimmed local branch bytes in `hwcfg.inc`:
+  - changed local `JP` to `JR` where in range (`HB_SND_GETMASK` entry check and
+    all `HBS2_* -> HBS2_SET_PAIR` dispatches)
+  - kept two long-range conditionals as `JP` after range check (`HBSA_FAIL`,
+    `HBS2_FAIL`)
+- Bumped VibeTune banner build number:
+  - `v0.1b085` -> `v0.1b086`
+- Validation: `Build.cmd` passes on WBW/ZX/MSX targets (0 errors)
+- Size note (before -> after):
+  - `vtune.com` 19,670 -> 19,663 (delta -7)
+  - `vtunemsx.com` 19,547 -> 19,540 (delta -7)
+  - `vtunezx.com` 19,551 -> 19,544 (delta -7)
 ---
 This document is the governing blueprint for the VibeTune refactor effort. Keep it updated as each phase completes.
 

@@ -4,6 +4,7 @@
 ;
 ; Organized by hardware platform and music engine chip.
 ;
+PORT_NONE		.EQU	0FFH		; generic "not present" sentinel for optional ports/fields
 
 ;=============================================================================
 ; AY-3-8910 (PSG) Port Sets — one for each supported hardware variant
@@ -43,7 +44,7 @@ YM2151_ALT_DAT			.EQU	0FFH	; alternate data write
 
 ; Secondary YM2151 (undefined on RCBUS, reserved for future use)
 YM2151_SECONDARY_SEL	.EQU	000H	; not defined on current hardware
-YM2151_SECONDARY_DAT	.EQU	000H	; not defined on current hardware
+YM2151_SECONDARY_DAT	.EQU	YM2151_SECONDARY_SEL	; not defined on current hardware
 
 ;=============================================================================
 ; OPL3 (YM3526/YM3812) Port Set — FIXED for all platforms
@@ -119,7 +120,7 @@ PSG_RCMF_PORTW   .EQU    PSG_RCMF_RDAT * 256 + PSG_RCMF_RSEL        ; $D0D1 (RC2
 ; Z180 Wait-State Register Base Port (CFGTBL field 5)
 ;=============================================================================
 
-Z180_NONE		.EQU	0FFH		; no Z180 wait-state register (standard Z80)
+Z180_NONE		.EQU	PORT_NONE	; no Z180 wait-state register (standard Z80)
 Z180_N8			.EQU	040H		; Nhyodyne N8VDP Z180 base
 Z180_RCZ180		.EQU	0C0H		; RCZ180 / SCZ180 base
 
@@ -127,10 +128,9 @@ Z180_RCZ180		.EQU	0C0H		; RCZ180 / SCZ180 base
 ; ACR (Auxiliary Control Register) Port and Enable Values (CFGTBL fields 6-7)
 ;=============================================================================
 
-ACR_NONE		.EQU	0FFH		; no ACR / field unused
+ACR_NONE		.EQU	PORT_NONE	; no ACR / field unused
 ACR_SCG			.EQU	09CH		; SBC / MK4 SCG ACR port
 ACR_MBC			.EQU	0A2H		; MBC ACR port
 ACR_DUO			.EQU	0A6H		; Duodyne ACR port
-
-ACRVAL_NONE		.EQU	0FFH		; ACRVAL field unused
+ACRVAL_NONE		.EQU	PORT_NONE	; ACRVAL field unused
 ACRVAL_ENABLE	.EQU	0FEH		; value written to ACR to enable sound output

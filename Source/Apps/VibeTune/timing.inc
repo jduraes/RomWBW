@@ -64,3 +64,141 @@ PROBETIMER:
 SETDLY:
 	LD	(WMOD),A		; Save wait mode
 	RET
+
+;
+; Get a keystroke from CPM
+;
+GETKEY	LD	C,6		; BDOS direct I/O
+	LD	E,$FF		; Get character if available
+	CALL	BDOS	; Call BDOS
+	OR	A			; Set flags, Z set if no key
+	RET				; Done
+
+; Print detected CPU speed in MHz (X.YYY) below the startup banner.
+; Uses HBIOS SYSGET/CPUINFO (BC=$F8F0), DE := KHz.
+PRTCPUKHZBAN:
+	PUSH	AF
+	PUSH	BC
+	PUSH	DE
+	PUSH	HL
+	CALL	CRLF
+	LD	DE,MSGCPUMHZ
+	CALL	PRTSTR
+	LD	BC,$F8F0
+	RST	08
+	EX	DE,HL
+
+	; Integer MHz = KHz / 1000 in B, remainder KHz in HL.
+	LD	B,0
+PRTCPUSPD_DIV1000:
+	LD	A,H
+	CP	03H
+	JR	C,PRTCPUSPD_DIV1000_DONE
+	JR	NZ,PRTCPUSPD_DIV1000_SUB
+	LD	A,L
+	CP	0E8H
+	JR	C,PRTCPUSPD_DIV1000_DONE
+PRTCPUSPD_DIV1000_SUB:
+	LD	A,L
+	SUB	0E8H
+	LD	L,A
+	LD	A,H
+	SBC	A,03H
+	LD	H,A
+	INC	B
+	JR	PRTCPUSPD_DIV1000
+PRTCPUSPD_DIV1000_DONE:
+
+	LD	A,B
+	CALL	PRTDECB
+	LD	A,'.'
+	CALL	PRTCHR
+
+	; Hundreds digit of remainder (0..999)
+	LD	A,0
+PRTCPUSPD_DIV100:
+	LD	B,A
+	LD	A,H
+	OR	A
+	JR	NZ,PRTCPUSPD_DIV100_SUB
+	LD	A,L
+	CP	100
+	JR	C,PRTCPUSPD_DIV100_DONE
+PRTCPUSPD_DIV100_SUB:
+	LD	A,L
+	SUB	100
+	LD	L,A
+	LD	A,H
+	SBC	A,0
+	LD	H,A
+	LD	A,B
+	INC	A
+	JR	PRTCPUSPD_DIV100
+PRTCPUSPD_DIV100_DONE:
+	LD	A,B
+	ADD	A,'0'
+	CALL	PRTCHR
+
+	; Tens digit of remainder (0..99)
+	LD	A,0
+PRTCPUSPD_DIV10:
+	LD	B,A
+	LD	A,L
+	CP	10
+	JR	C,PRTCPUSPD_DIV10_DONE
+	SUB	10
+	LD	L,A
+	LD	A,B
+	INC	A
+	JR	PRTCPUSPD_DIV10
+PRTCPUSPD_DIV10_DONE:
+	LD	A,B
+	ADD	A,'0'
+	CALL	PRTCHR
+
+	; Ones digit of remainder
+	LD	A,L
+	ADD	A,'0'
+	CALL	PRTCHR
+
+	LD	DE,MSGMHZ
+	CALL	PRTSTR
+	POP	HL
+	POP	DE
+	POP	BC
+	POP	AF
+	RET
+
+;
+; Drain any pending console keypresses (used to clear command-enter residue).
+;
+FLUSHKEYS:
+	PUSH	AF
+	PUSH	BC
+	PUSH	DE
+	PUSH	HL
+FLUSHKEYS1:
+	CALL	GETKEY
+	JR	Z,FLUSHKEYS2
+	JR	FLUSHKEYS1
+FLUSHKEYS2:
+	POP	HL
+	POP	DE
+	POP	BC
+	POP	AF
+	RET
+;
+; Print the wait mode suffix based on WMOD
+;   WMOD == 0  -> delay mode
+;   WMOD != 0  -> timer mode
+;
+PRTWMOD:
+	LD	A,(WMOD)
+	OR	A
+	JR	Z,PRTWMOD_DLY
+	LD	DE,MSGTIM
+	JR	PRTWMOD_P
+PRTWMOD_DLY:
+	LD	DE,MSGDLY
+PRTWMOD_P:
+	JP	PRTSTR

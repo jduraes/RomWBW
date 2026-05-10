@@ -231,3 +231,300 @@ PRTSM2:
 	DJNZ	PRTSM2
 	CALL	CRLF2
 	RET
+
+;
+; Print current FCB filename in 8.3 form, suppressing trailing spaces.
+;
+PRTFCB83:
+	PUSH	AF
+	PUSH	BC
+	PUSH	HL
+	LD	HL,FCB+1
+	LD	B,8
+PRTFCB83_1:
+	LD	A,(HL)
+	INC	HL
+	CP	' '
+	JR	Z,PRTFCB83_2
+	CALL	PRTCHR
+PRTFCB83_2:
+	DJNZ	PRTFCB83_1
+	LD	A,'.'
+	CALL	PRTCHR
+	LD	B,3
+PRTFCB83_3:
+	LD	A,(HL)
+	INC	HL
+	CP	' '
+	JR	Z,PRTFCB83_4
+	CALL	PRTCHR
+PRTFCB83_4:
+	DJNZ	PRTFCB83_3
+	POP	HL
+	POP	BC
+	POP	AF
+	RET
+;
+; Print VGM metadata block.
+;
+PRTVGMMETA:
+	LD	A,(UI_ACTIVE)
+	OR	A
+	JR	Z,PRTVGMMETA0
+	CALL	UI_ENSURE_INIT
+	LD	B,UI_ROW_META1
+	CALL	UI_CLR_ROW
+	LD	B,UI_ROW_META2
+	CALL	UI_CLR_ROW
+	LD	B,UI_ROW_META1
+	LD	C,1
+	CALL	TCFG_ANSI_AT
+	LD	DE,MSGSONGNAME
+	CALL	PRTSTR
+	CALL	VGM_GD3_INIT
+	JR	NZ,PRTVGMMETAU_FN
+	CALL	VGM_GD3_PRINT_FIELD	; track name (English)
+	PUSH	AF
+	CALL	VGM_GD3_SKIP_FIELD	; skip track_jp, land on game_en
+	PUSH	HL
+	PUSH	DE
+	CALL	VGM_GD3_FIELD_HAS_TEXT
+	POP	DE
+	POP	HL
+	JR	Z,PRTVGMMETAU_FN1
+	PUSH	DE
+	LD	DE,MSGFROM
+	CALL	PRTSTR
+	POP	DE
+	CALL	VGM_GD3_PRINT_FIELD
+PRTVGMMETAU_FN1:
+	POP	AF
+	OR	A
+	JR	NZ,PRTVGMMETAU_ART
+PRTVGMMETAU_FN:
+	CALL	PRTFCB83
+PRTVGMMETAU_ART:
+	LD	B,UI_ROW_META2
+	LD	C,1
+	CALL	TCFG_ANSI_AT
+	LD	DE,MSGARTIST
+	CALL	PRTSTR
+	CALL	VGM_GD3_INIT
+	JR	NZ,PRTVGMMETAU_GD3
+	LD	B,6			; skip to author_en
+PRTVGMMETAU_SKP:
+	CALL	VGM_GD3_SKIP_FIELD
+	DJNZ	PRTVGMMETAU_SKP
+	CALL	VGM_GD3_PRINT_FIELD	; author (English)
+	RET
+PRTVGMMETAU_GD3:
+	RET
+PRTVGMMETA0:
+	LD	DE,MSGSONGNAME
+	CALL	PRTSTR
+	CALL	VGM_GD3_INIT
+	JR	NZ,PRTVGMMETA0_FN
+	CALL	VGM_GD3_PRINT_FIELD	; track name (English)
+	PUSH	AF
+	CALL	VGM_GD3_SKIP_FIELD	; skip track_jp, land on game_en
+	PUSH	HL
+	PUSH	DE
+	CALL	VGM_GD3_FIELD_HAS_TEXT
+	POP	DE
+	POP	HL
+	JR	Z,PRTVGMMETA0_FN1
+	PUSH	DE
+	LD	DE,MSGFROM
+	CALL	PRTSTR
+	POP	DE
+	CALL	VGM_GD3_PRINT_FIELD
+PRTVGMMETA0_FN1:
+	POP	AF
+	OR	A
+	JR	NZ,PRTVGMMETA0_ART
+PRTVGMMETA0_FN:
+	CALL	PRTFCB83
+PRTVGMMETA0_ART:
+	CALL	CRLF
+	LD	DE,MSGARTIST
+	CALL	PRTSTR
+	CALL	VGM_GD3_INIT
+	JR	NZ,PRTVGMMETA0_GD3
+	LD	B,6			; skip to author_en
+PRTVGMMETA0_SKP:
+	CALL	VGM_GD3_SKIP_FIELD
+	DJNZ	PRTVGMMETA0_SKP
+	CALL	VGM_GD3_PRINT_FIELD	; author (English)
+PRTVGMMETA0_GD3:
+PRTVGMMETA0_END:
+	CALL	CRLF2
+	RET
+
+; Return NZ if UTF-16LE field at HL has at least one character and is in bounds.
+; Input: HL=field pointer, DE=text_end.
+VGM_GD3_FIELD_HAS_TEXT:
+	LD	A,H
+	CP	D
+	JR	C,VGM_GD3_FHT0
+	JR	NZ,VGM_GD3_FHTX
+	LD	A,L
+	CP	E
+	JR	NC,VGM_GD3_FHTX
+VGM_GD3_FHT0:
+	LD	A,(HL)
+	INC	HL
+	LD	C,A
+	LD	A,H
+	CP	D
+	JR	C,VGM_GD3_FHT1
+	JR	NZ,VGM_GD3_FHTX
+	LD	A,L
+	CP	E
+	JR	NC,VGM_GD3_FHTX
+VGM_GD3_FHT1:
+	LD	A,(HL)
+	OR	C
+	RET
+VGM_GD3_FHTX:
+	XOR	A
+	RET
+
+; Initialize GD3 pointers for parsing.
+; Returns Z on success with HL=text_start, DE=text_end.
+; Returns NZ if GD3 is missing/invalid/out of bounds.
+VGM_GD3_INIT:
+	LD	HL,(vgmdata + 14H)	; GD3 offset relative to 0x14
+	LD	A,H
+	OR	L
+	JR	Z,VGM_GD3_INIT_FAIL
+	LD	DE,0014H
+	ADD	HL,DE
+	LD	DE,vgmdata
+	ADD	HL,DE			; HL = GD3 block base
+	LD	A,(HL)
+	CP	'G'
+	JR	NZ,VGM_GD3_INIT_FAIL
+	INC	HL
+	LD	A,(HL)
+	CP	'd'
+	JR	NZ,VGM_GD3_INIT_FAIL
+	INC	HL
+	LD	A,(HL)
+	CP	'3'
+	JR	NZ,VGM_GD3_INIT_FAIL
+	INC	HL
+	LD	A,(HL)
+	CP	' '
+	JR	NZ,VGM_GD3_INIT_FAIL
+	INC	HL			; +4 version[0]
+	INC	HL			; +5
+	INC	HL			; +6
+	INC	HL			; +7 version[3]
+	INC	HL			; +8 length[0]
+	LD	C,(HL)
+	INC	HL			; +9 length[1]
+	LD	B,(HL)
+	INC	HL			; +A length[2]
+	LD	A,(HL)
+	INC	HL			; +B length[3]
+	LD	D,(HL)
+	INC	HL			; +C text start
+	OR	D
+	JR	NZ,VGM_GD3_INIT_FAIL	; length above 64K unsupported
+	PUSH	HL			; save text start
+	ADD	HL,BC			; HL = text end
+	EX	DE,HL			; DE = text end
+	LD	HL,(LOADBYTES)
+	LD	BC,MDLADDR
+	ADD	HL,BC			; HL = loaded end
+	OR	A			; clear carry
+	SBC	HL,DE			; loaded_end - text_end
+	JR	C,VGM_GD3_INIT_FAIL_POP
+	POP	HL			; restore text start
+	XOR	A			; Z = success
+	RET
+VGM_GD3_INIT_FAIL_POP:
+	POP	HL
+VGM_GD3_INIT_FAIL:
+	OR	$FF			; NZ = fail
+	RET
+
+; Skip one UTF-16LE null-terminated GD3 field.
+; Input: HL=field pointer, DE=text_end.
+; Output: HL=next field pointer.
+VGM_GD3_SKIP_FIELD:
+	LD	A,H
+	CP	D
+	JR	C,VGM_GD3_SKIP0
+	JR	NZ,VGM_GD3_SKIPX
+	LD	A,L
+	CP	E
+	JR	NC,VGM_GD3_SKIPX
+VGM_GD3_SKIP0:
+	LD	A,(HL)
+	INC	HL
+	LD	C,A			; low byte
+	LD	A,H
+	CP	D
+	JR	C,VGM_GD3_SKIP1
+	JR	NZ,VGM_GD3_SKIPX
+	LD	A,L
+	CP	E
+	JR	NC,VGM_GD3_SKIPX
+VGM_GD3_SKIP1:
+	LD	A,(HL)
+	INC	HL
+	OR	C
+	JR	NZ,VGM_GD3_SKIP_FIELD
+VGM_GD3_SKIPX:
+	RET
+
+; Print one UTF-16LE GD3 field as ASCII-ish text.
+; Input: HL=field pointer, DE=text_end.
+; Output: HL=next field pointer, A=0 if empty, A=FF if anything printed.
+VGM_GD3_PRINT_FIELD:
+	XOR	A
+	LD	(TMP),A			; printed flag
+VGM_GD3_PLP:
+	LD	A,H
+	CP	D
+	JR	C,VGM_GD3_PL0
+	JR	NZ,VGM_GD3_PLX
+	LD	A,L
+	CP	E
+	JR	NC,VGM_GD3_PLX
+VGM_GD3_PL0:
+	LD	A,(HL)
+	INC	HL
+	LD	C,A			; low byte
+	LD	A,H
+	CP	D
+	JR	C,VGM_GD3_PL1
+	JR	NZ,VGM_GD3_PLX
+	LD	A,L
+	CP	E
+	JR	NC,VGM_GD3_PLX
+VGM_GD3_PL1:
+	LD	A,(HL)
+	INC	HL
+	LD	B,A			; high byte
+	LD	A,B
+	OR	C
+	JR	Z,VGM_GD3_PLX
+	LD	A,B
+	OR	A
+	JR	Z,VGM_GD3_ASCII
+	LD	A,'?'
+	CALL	PRTCHR
+	LD	A,$FF
+	LD	(TMP),A
+	JR	VGM_GD3_PLP
+VGM_GD3_ASCII:
+	LD	A,C
+	CALL	PRTCHR
+	LD	A,$FF
+	LD	(TMP),A
+	JR	VGM_GD3_PLP
+VGM_GD3_PLX:
+	LD	A,(TMP)
+	RET
