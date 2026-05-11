@@ -1,6 +1,5 @@
 ;
 ; Hardware IO port configuration - single source of truth for all music engine IO.
-; Extracted and centralized from vibetune.asm and hwcfg.inc.
 ;
 ; Organized by hardware platform and music engine chip.
 ;

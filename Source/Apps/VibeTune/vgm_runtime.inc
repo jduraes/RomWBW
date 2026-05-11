@@ -4,6 +4,8 @@
 ;
 goVGM:
 	CALL	VGM_VALIDATE_IMAGE	; fail fast if VGM image is truncated
+	CALL	VGM_MMU_SELFTEST	; fail fast if MMU read/cache sanity checks fail
+	JP	NZ,ERRVGMMMU
 
 	; Probe AY chip ports into TS_PORTS1/TS_PORTS2 (same as TurboSound PT3)
 	ISHBIOS
@@ -30,18 +32,11 @@ goVGM_fd_done:
 	LD	A,$FF
 	LD	(VGMFLAG),A
 
-	; Compute stream start address from VGM header offset field at +0x34
-	; Absolute start = (vgmdata+0x34) + value_at(vgmdata+0x34)
-	; If offset field is 0 (v1.00 files), default stream starts at +0x40
-	LD	HL,(vgmdata + 34H)
-	LD	A,H
-	OR	L
-	JR	NZ,goVGM_ofs
-	LD	HL,0CH			; v1.00/zero-offset default: stream at vgmdata+0x40 (=0x34+0x0C)
-goVGM_ofs:
-	LD	DE,vgmdata + 34H	; address of the offset field itself
-	ADD	HL,DE			; absolute command stream start
+	; Compute stream start as 24-bit logical offset from file base.
+	CALL	VGM_GET_STREAM_START	; returns C:HL
 	LD	(vgmpos),HL
+	LD	A,C
+	LD	(vgmpos+2),A
 
 	; Initialise delay counter
 	LD	HL,0

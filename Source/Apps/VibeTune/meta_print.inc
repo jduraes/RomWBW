@@ -393,6 +393,12 @@ VGM_GD3_FHTX:
 ; Returns Z on success with HL=text_start, DE=text_end.
 ; Returns NZ if GD3 is missing/invalid/out of bounds.
 VGM_GD3_INIT:
+	LD	A,(VGMMMUMD)
+	OR	A
+	JR	Z,VGM_GD3_INIT0
+	OR	$FF			; MMU mode currently falls back to filename/artist defaults
+	RET
+VGM_GD3_INIT0:
 	LD	HL,(vgmdata + 14H)	; GD3 offset relative to 0x14
 	LD	A,H
 	OR	L
