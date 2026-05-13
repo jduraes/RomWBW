@@ -90,6 +90,11 @@ if (($Platform -eq "SC720") -and ($Config -eq "std") -and ($ROMName -eq "SC720_s
     $ROMName = "sc720std"
 }
 
+# RCZ80: minramd config - boot CONFIG is RCZ80_minramd; 8.3 files rcz80min.*
+if (($Platform -eq "RCZ80") -and ($Config -eq "minramd") -and ($ROMName -eq "RCZ80_minramd")) {
+    $ROMName = "rcz80min"
+}
+
 while ($ROMName -eq "")
 {
 	$CP = (Read-Host -prompt "ROM Name [${Config}]").Trim()

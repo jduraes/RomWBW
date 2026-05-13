@@ -19,11 +19,15 @@ VGM_RD_NEXT:
 	PUSH	HL
 	PUSH	AF
 	CALL	VGM_MMU_READ_AT
+	JR	C,VGM_RD_NEXT_ERR
 	LD	E,A
 	POP	AF
 	LD	B,A
 	POP	HL
 	INC	HL
+	; Z80: INC HL does not affect flags (cannot branch on HL wrap via F from POP AF).
+	LD	A,H
+	OR	L
 	JR	NZ,VGM_RD_NEXT0
 	INC	B
 VGM_RD_NEXT0:
@@ -34,6 +38,32 @@ VGM_RD_NEXT0:
 	POP	DE
 	POP	BC
 	RET
+VGM_RD_NEXT_ERR:
+	POP	AF
+	LD	B,A
+	POP	HL
+	LD	(vgmpos),HL
+	LD	A,B
+	LD	(vgmpos+2),A
+	LD	A,$FF
+	LD	(VGMRDERR),A
+	XOR	A
+	POP	DE
+	POP	BC
+	RET
+
+; Like VGM_RD_NEXT, but abort to ERRVGMRD_STR if MMU read failed (VGMRDERR set).
+VGM_RD_NEXT_EX:
+	CALL	VGM_RD_NEXT
+	PUSH	AF
+	LD	A,(VGMRDERR)
+	OR	A
+	JR	NZ,VGM_RD_NEXT_EXE
+	POP	AF
+	RET
+VGM_RD_NEXT_EXE:
+	POP	AF
+	JP	ERRVGMRD_STR
 
 ; Add A (0..255) to vgmpos.
 VGM_POS_ADD_A:
@@ -131,15 +161,15 @@ VGM_SKIP_68:
 	RET
 VGM_SKIP_67:
 	; Format: 67 66 tt ss ss ss ss [data...]
-	CALL	VGM_RD_NEXT		; marker (0x66)
-	CALL	VGM_RD_NEXT		; type
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX		; marker (0x66)
+	CALL	VGM_RD_NEXT_EX		; type
+	CALL	VGM_RD_NEXT_EX
 	LD	E,A			; size byte 0
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	LD	D,A			; size byte 1
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	LD	C,A			; size byte 2
-	CALL	VGM_RD_NEXT		; size byte 3
+	CALL	VGM_RD_NEXT_EX		; size byte 3
 	OR	A
 	JR	Z,VGM_SKIP_67_OK
 	CALL	VGM_POS_SET_END		; unsupported 32-bit length -> clamp to end
@@ -157,10 +187,11 @@ VGM_SKIP_67_OK:
 ;===============================================================================
 VGM_PLAY_FRAME:
 VGM_NEXT:
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	CP	66H			; end / loop
 	JR	NZ,VGM_NEXT1
 	CALL	VGM_MMU_SYNC_HDR
+	JP	C,ERRVGMRD_LPS
 	LD	A,(vgmdata + 1CH)	; loop offset (relative to 0x1C)
 	LD	E,A
 	LD	A,(vgmdata + 1DH)
@@ -203,14 +234,14 @@ VGM_OPL2:
 VGM_OPL_B1:
 	LD	C,OPL3ADDR1
 VGM_OPL_DO:
-	CALL	VGM_RD_NEXT		; register
+	CALL	VGM_RD_NEXT_EX		; register
 	LD	E,A
 	OUT	(C),A
 	PUSH	BC
 	LD	B,3
 	DJNZ	$
 	POP	BC
-	CALL	VGM_RD_NEXT		; data
+	CALL	VGM_RD_NEXT_EX		; data
 	LD	D,A
 	LD	A,E
 	SUB	43H
@@ -233,27 +264,27 @@ VGM_OPL_WDATA:
 VGM_PSG:
 	CP	50H			; SN76489 primary
 	JR	NZ,VGM_PSG2
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	OUT	(PSGREG),A
 	JP	VGM_NEXT
 
 VGM_PSG2:
 	CP	30H			; SN76489 secondary
 	JR	NZ,VGM_YM2151
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	OUT	(PSG2REG),A
 	JP	VGM_NEXT
 
 VGM_YM2151:
 	CP	054H			; YM2151 primary write
 	JR	NZ,VGM_YM2151_2
-	CALL	VGM_RD_NEXT		; register
+	CALL	VGM_RD_NEXT_EX		; register
 	LD	D,A
 	LD	A,(YM2151SELV)
 	LD	C,A
 	LD	A,D
 	OUT	(C),A
-	CALL	VGM_RD_NEXT		; data
+	CALL	VGM_RD_NEXT_EX		; data
 	LD	D,A
 	LD	A,(YM2151DATV)
 	LD	C,A
@@ -267,13 +298,13 @@ VGM_YM2151_2:
 	LD	A,(YM2151SEL2V)
 	OR	A
 	JR	Z,VGM_YM2151_2_SKIP
-	CALL	VGM_RD_NEXT		; register
+	CALL	VGM_RD_NEXT_EX		; register
 	LD	D,A
 	LD	A,(YM2151SEL2V)
 	LD	C,A
 	LD	A,D
 	OUT	(C),A
-	CALL	VGM_RD_NEXT		; data
+	CALL	VGM_RD_NEXT_EX		; data
 	LD	D,A
 	LD	A,(YM2151DAT2V)
 	LD	C,A
@@ -288,7 +319,7 @@ VGM_YM2151_2_SKIP:
 VGM_AY:
 	CP	0A0H			; AY register/data write
 	JR	NZ,VGM_WAITNN
-	CALL	VGM_RD_NEXT		; register (bit7 selects chip2)
+	CALL	VGM_RD_NEXT_EX		; register (bit7 selects chip2)
 	BIT	7,A
 	JR	Z,VGM_AY1
 	AND	7FH
@@ -297,7 +328,7 @@ VGM_AY:
 	LD	A,C
 	LD	C,E
 	OUT	(C),A
-	CALL	VGM_RD_NEXT		; data
+	CALL	VGM_RD_NEXT_EX		; data
 	LD	C,D
 	OUT	(C),A
 	JP	VGM_NEXT
@@ -307,7 +338,7 @@ VGM_AY1:
 	LD	A,C
 	LD	C,E
 	OUT	(C),A
-	CALL	VGM_RD_NEXT		; data
+	CALL	VGM_RD_NEXT_EX		; data
 	LD	C,D
 	OUT	(C),A
 	JP	VGM_NEXT
@@ -315,9 +346,9 @@ VGM_AY1:
 VGM_WAITNN:
 	CP	61H			; wait nn samples
 	JR	NZ,VGM_WAIT60
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	LD	E,A
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	LD	D,A
 	LD	L,E
 	LD	H,D

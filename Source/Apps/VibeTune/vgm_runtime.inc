@@ -3,8 +3,8 @@
 ; Extracted from vibetune.asm without behavior changes.
 ;
 goVGM:
-	CALL	VGM_VALIDATE_IMAGE	; fail fast if VGM image is truncated
-	CALL	VGM_MMU_SELFTEST	; fail fast if MMU read/cache sanity checks fail
+	CALL	VGM_VALIDATE_IMAGE	; header / stream bounds vs loaded image
+	CALL	VGM_MMU_SELFTEST	; MMU: cache sanity; linear: 'Vgm ' at vgmdata
 	JP	NZ,ERRVGMMMU
 
 	; Probe AY chip ports into TS_PORTS1/TS_PORTS2 (same as TurboSound PT3)
@@ -37,6 +37,8 @@ goVGM_fd_done:
 	LD	(vgmpos),HL
 	LD	A,C
 	LD	(vgmpos+2),A
+	XOR	A
+	LD	(VGMRDERR),A		; clear stream read-error latch before playback
 
 	; Initialise delay counter
 	LD	HL,0
@@ -149,10 +151,8 @@ goVGM_exit_mute:
 	JP	EXIT
 
 ;
-; Validate loaded VGM size against the header EOF offset (bytes 0x04..0x07).
-; Expected file size is EOF offset + 4 bytes (32-bit value).
-; If expected size exceeds 64K, or loaded bytes are smaller than expected,
-; the file is truncated/corrupt for our in-memory playback model.
+; Validate VGM header (EOF field sanity, stream start vs loaded image).
+; Physical loaded size (VGMLOADSZ) is authoritative; header EOF may overshoot.
 ;
 
 

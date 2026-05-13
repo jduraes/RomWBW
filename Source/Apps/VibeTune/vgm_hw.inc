@@ -15,12 +15,13 @@ VGM_DETECT_HW:
 	XOR	A
 	LD	(VGMCHIPFLG),A
 	LD	(VGMDUALFLG),A
+	LD	(VGMRDERR),A
 	CALL	VGM_GET_STREAM_START	; C:HL logical stream start
 	LD	(vgmpos),HL
 	LD	A,C
 	LD	(vgmpos+2),A
 VGM_DET_LP:
-	CALL	VGM_RD_NEXT
+	CALL	VGM_RD_NEXT_EX
 	CP	66H
 	RET	Z
 	CP	4FH
@@ -98,7 +99,7 @@ VGM_DET_AY:
 	LD	A,(VGMCHIPFLG)
 	OR	00000100B
 	LD	(VGMCHIPFLG),A
-	CALL	VGM_RD_NEXT		; register byte (bit7 = chip 2)
+	CALL	VGM_RD_NEXT_EX		; register byte (bit7 = chip 2)
 	BIT	7,A
 	JR	Z,VGM_DET_AY0
 	LD	A,(VGMDUALFLG)

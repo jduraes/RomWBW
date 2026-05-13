@@ -82,8 +82,14 @@ BF_SNDQ_DEV		.EQU	4		; query: return device type and IO ports
 BF_SYSGETBNK		.EQU	$F3		; HBIOS: get current bank
 BF_SYSSETCPY		.EQU	$F4		; HBIOS: configure inter-bank copy
 BF_SYSBNKCPY		.EQU	$F5		; HBIOS: perform inter-bank copy
-BF_SYSGET_APPBNKS	.EQU	$F5		; SYSGET subfunction: app bank info
+BF_SYSGET_APPBNKS	.EQU	$F5		; SYSGET subfunction: app bank info (C with B=BF_SYSGET)
 BC_SYSGET_APPBNKS	.EQU	(BF_SYSGET * 256) + BF_SYSGET_APPBNKS
+BF_SYSGET_BNKINFO	.EQU	$F2		; SYSGET: D/E = BIOS/user bank ids (RomWBW hbios)
+BC_SYSGET_BNKINFO	.EQU	(BF_SYSGET * 256) + BF_SYSGET_BNKINFO
+BF_SYSPEEK		.EQU	$FA		; HBIOS: read byte from bank D at HL -> E
+HCB_LOC			.EQU	$100		; HBIOS control block base in BIOS bank (RomWBW)
+HCB_BIDAPP0		.EQU	$E0		; offset: first app RAM bank id
+HCB_APP_BNKS		.EQU	$E1		; offset: app bank count
 PLMAX			.EQU	128		; max files in internal playlist
 ;
 HEAPEND			.EQU	$C000	; End of heap storage
@@ -416,15 +422,17 @@ _LDCLR	XOR	A			; reset load byte counter
 	LD	(LOADBYTES+1),A
 	LD	(VGMMMUMD),A
 	LD	(VGMWINVAL),A
+	LD	(VGMWSTRM),A
 	LD	(VGMLOADSZ),A
 	LD	(VGMLOADSZ+1),A
 	LD	(VGMLOADSZ+2),A
 	LD	(vgmpos),A
 	LD	(vgmpos+1),A
 	LD	(vgmpos+2),A
+	LD	(VGMRDERR),A
 	LD	A,(FILTYP)
 	CP	TYPVGM
-	JP	Z,VGM_LOAD_MMU
+	JP	Z,VGM_LOAD_VGM
 ;
 _LD	LD	HL,(DMA)		; Get load address
 	PUSH	HL			; Save it
@@ -442,7 +450,7 @@ _LD	LD	HL,(DMA)		; Get load address
 	LD	DE,FCB			; FCB
 	CALL	BDOS		; Read next 128 bytes
 	OR	A				; Set flags to check EOF
-	JR	NZ,_LDX			; Non-zero is EOF
+	JP	NZ,_LDX			; Non-zero is EOF (JR range to _LDX)
 	; successful read, count bytes loaded (128 at a time)
 	LD	HL,(LOADBYTES)
 	LD	DE,128
@@ -450,12 +458,159 @@ _LD	LD	HL,(DMA)		; Get load address
 	LD	(LOADBYTES),HL
 	JR	_LD			; Load loop
 ;
+; Parse expected VGM file size (EOF offset + 4) from PLSRCHBUF into VGMEXP (LE).
+; CY if unsupported (EOF high byte non-zero) or zero size.
+;
+VGM_PARSE_HDR_EXP:
+	LD	A,(PLSRCHBUF+7)
+	OR	A
+	SCF
+	RET	NZ
+	LD	HL,(PLSRCHBUF+4)
+	LD	A,(PLSRCHBUF+6)
+	LD	C,A
+	XOR	A
+	LD	DE,4
+	ADD	HL,DE
+	LD	A,C
+	ADC	A,0
+	LD	(VGMEXP),HL
+	PUSH	HL
+	LD	HL,VGMEXP
+	INC	HL
+	INC	HL
+	LD	(HL),A
+	POP	HL
+	OR	H
+	OR	L
+	SCF
+	RET	Z
+	OR	A
+	RET
+;
+; Max bytes loadable from vgmdata upward without crossing HEAPENDB (_LD rule).
+; Out: 24-bit LE in VGMCAP (high byte 0).
+;
+VGM_MAX_LINEAR:
+	XOR	A
+	LD	(VGMCAP+2),A
+	LD	DE,vgmdata
+	LD	BC,0
+VGM_MXL_LP:
+	LD	HL,128
+	ADD	HL,DE
+	LD	A,(HEAPENDB)
+	CP	H
+	JR	Z,VGM_MXLX
+	LD	D,H
+	LD	E,L
+	LD	HL,128
+	ADD	HL,BC
+	LD	B,H
+	LD	C,L
+	JR	VGM_MXL_LP
+VGM_MXLX:
+	LD	H,B
+	LD	L,C
+	LD	(VGMCAP),HL
+	RET
+;
+; VGM load: first sector in PLSRCHBUF. If header size fits in TPA, load linearly
+; into vgmdata; else close/reopen and bank-load into MMU app RAM.
+;
+VGM_LOAD_VGM:
+	LD	DE,PLSRCHBUF
+	LD	C,26
+	CALL	BDOS
+	LD	C,20
+	LD	DE,FCB
+	CALL	BDOS
+	OR	A
+	JP	NZ,ERRVGMTR		; 0=sector read OK; NZ=EOF/error (empty/unreadable)
+	CALL	VGM_PARSE_HDR_EXP
+	JP	C,ERRVGMTR
+	CALL	VGM_MAX_LINEAR
+	LD	A,(VGMEXP+2)
+	OR	A
+	JR	NZ,VGM_LV_BANK
+	LD	HL,(VGMEXP)
+	LD	DE,(VGMCAP)
+	LD	A,H
+	CP	D
+	JR	C,VGM_LV_LINEAR
+	JR	NZ,VGM_LV_BANK
+	LD	A,L
+	CP	E
+	JR	C,VGM_LV_LINEAR
+	JR	NZ,VGM_LV_BANK
+VGM_LV_LINEAR:
+	LD	HL,PLSRCHBUF
+	LD	DE,vgmdata
+	LD	BC,128
+	LDIR
+	LD	HL,128
+	LD	(VGMLOADSZ),HL
+	XOR	A
+	LD	(VGMLOADSZ+2),A
+	LD	(LOADBYTES),HL
+	LD	HL,vgmdata
+	LD	DE,128
+	ADD	HL,DE
+	LD	(DMA),HL
+VGM_LL1:
+	LD	HL,(DMA)
+	PUSH	HL
+	LD	DE,128
+	ADD	HL,DE
+	LD	A,(HEAPENDB)
+	CP	H
+	JP	Z,ERRSIZ
+	POP	DE
+	LD	C,26
+	CALL	BDOS
+	LD	C,20
+	LD	DE,FCB
+	CALL	BDOS
+	OR	A
+	JR	NZ,VGM_LOAD_LINEAR_DONE
+	LD	HL,(LOADBYTES)
+	LD	DE,128
+	ADD	HL,DE
+	LD	(LOADBYTES),HL
+	CALL	VGM_LOADSZ_ADD_128
+	LD	HL,(DMA)
+	LD	DE,128
+	ADD	HL,DE
+	LD	(DMA),HL
+	JR	VGM_LL1
+VGM_LOAD_LINEAR_DONE:
+	XOR	A
+	LD	(VGMWSTRM),A
+	LD	A,$FF
+	LD	(VGMWINVAL),A
+	JP	_LDX
+VGM_LV_BANK:
+	; Probe read above consumed logical record 0 and left it in PLSRCHBUF.
+	; Do not close/reopen here: some BDOS stacks return EOF on the first
+	; sequential read after reopen, which leaves VGMLOADSZ wrong and trips
+	; VGM_VALIDATE_IMAGE (stream start vs loaded size).
+;
 VGM_LOAD_MMU:
 	CALL	VGM_MMU_INIT
-	JP	NZ,ERRSIZ
+	JP	NZ,ERRVGMINIT
 	LD	DE,PLSRCHBUF		; VGM DMA buffer (fixed 128-byte record)
 	LD	C,26			; CPM Set DMA function (once for fixed buffer)
 	CALL	BDOS
+	; Bank 0..127 from probe sector; FCB already points at record 1.
+	CALL	VGM_MMU_WRITE_REC
+	JP	NZ,ERRVGMAX
+	LD	HL,(LOADBYTES)
+	LD	DE,128
+	ADD	HL,DE
+	LD	(LOADBYTES),HL
+	CALL	VGM_LOADSZ_ADD_128
+	CALL	VGM_MMU_VERIFY_LAST_REC
+	JP	NZ,ERRVGMVF
 ;
 VGM_LOAD_MMU1:
 	LD	C,20			; CPM Read Sequential function
@@ -464,20 +619,22 @@ VGM_LOAD_MMU1:
 	OR	A			; Set flags to check EOF
 	JR	NZ,VGM_LOAD_MMU_DONE	; Non-zero is EOF
 	CALL	VGM_MMU_WRITE_REC	; write one 128-byte record into app banks
-	JP	NZ,ERRSIZ		; fail if app-bank capacity exceeded
+	JP	NZ,ERRVGMAX		; fail if app-bank capacity exceeded
 	LD	HL,(LOADBYTES)
 	LD	DE,128
 	ADD	HL,DE
 	LD	(LOADBYTES),HL
 	CALL	VGM_LOADSZ_ADD_128
+	CALL	VGM_MMU_VERIFY_LAST_REC	; MMU readback vs PLSRCHBUF (post-write)
+	JP	NZ,ERRVGMVF
 	JR	VGM_LOAD_MMU1
 ;
 VGM_LOAD_MMU_DONE:
 	XOR	A
-	LD	(VGMWINVAL),A		; force first read to repopulate cache
-	LD	HL,0
-	LD	A,0
-	CALL	VGM_MMU_READ_AT		; prime header cache at vgmdata
+	LD	(VGMWSTRM),A
+	LD	(VGMWINVAL),A		; header window not filled until LOAD_WIN0
+	CALL	VGM_MMU_LOAD_WIN0	; copy file bytes [0..127] into vgmdata
+	JP	C,ERRVGMRD_PRI
 	JP	_LDX
 ;
 _LDX	LD	C,16			; CPM Close File function
@@ -539,19 +696,25 @@ VGM_VALIDATE_IMAGE:
 	LD	B,A
 	LD	A,B
 	OR	A
+	; Header allows large EOF; real VGMs are typically ~15-100KB (well under 300KB).
 	JP	NZ,ERRVGMTR			; >16MB not supported in this MMU model
-	LD	A,(VGMLOADSZ+2)		; loaded size byte 2
-	CP	C
-	JP	C,ERRVGMTR			; loaded < expected
-	JR	NZ,VGM_VAL_OK
-	LD	A,(VGMLOADSZ+1)		; loaded size byte 1
-	CP	D
-	JP	C,ERRVGMTR
-	JR	NZ,VGM_VAL_OK
-	LD	A,(VGMLOADSZ)		; loaded size byte 0
-	CP	E
-	JP	C,ERRVGMTR
+	; Do not require loaded bytes >= header EOF: many rips have EOF past real
+	; length; PC players use physical file size. We bound playback by VGMLOADSZ.
 VGM_VAL_OK:
+	CALL	VGM_GET_STREAM_START	; C:HL = first command-stream byte offset
+	LD	A,(VGMLOADSZ+2)
+	CP	C
+	JP	C,ERRVGMTR		; stream start above image (high byte)
+	JR	NZ,VGM_VAL_STROK
+	LD	A,(VGMLOADSZ+1)
+	CP	H
+	JP	C,ERRVGMTR
+	JR	NZ,VGM_VAL_STROK
+	LD	A,(VGMLOADSZ)
+	CP	L
+	JP	C,ERRVGMTR
+	JP	Z,ERRVGMTR		; stream start == image size (no bytes to read)
+VGM_VAL_STROK:
 	RET
 ;
 ; Return command-stream start as C:HL (24-bit offset from file base).
@@ -584,16 +747,58 @@ VGM_GSS_OFS:
 	LD	C,A
 	RET
 ;
-; Ensure header bytes at vgmdata+00..7F are currently cached in MMU mode.
-; Returns with A = first header byte read (unused by most callers).
+; Ensure header bytes at vgmdata+00..7F match file offset 0..7F (MMU mode).
+; If VGMWINVAL is set, RAM already matches banks (primed at load); skip a
+; second BNKCPY — post-BDOS CLOSE the copy can fail even when data is fine.
+; Returns with A = first header byte in vgmdata (unused by most callers).
 ;
 VGM_MMU_SYNC_HDR:
 	LD	A,(VGMMMUMD)
 	OR	A
 	RET	Z
-	LD	HL,0
+	LD	A,(VGMWINVAL)
+	OR	A
+	JR	NZ,VGM_MMU_SYNC_HDR_RAMOK
+	CALL	VGM_MMU_LOAD_WIN0
+	JP	C,ERRVGMRD_HDR
+VGM_MMU_SYNC_HDR_RAMOK:
+	LD	A,(vgmdata)
+	OR	A				; NC, A = first header byte
+	RET
+;
+; Copy VGM logical bytes [0..127] from app banks into vgmdata (one BNKCPY).
+; Returns NC on success, CY on failure.
+;
+VGM_MMU_LOAD_WIN0:
 	XOR	A
-	CALL	VGM_MMU_READ_AT
+	LD	HL,0
+	CALL	VGM_OFF_TO_BNK
+	RET	C
+	LD	(VGMTMPBNK),A
+	LD	(VGMTMPADR),HL
+	CALL	VGM_MMU_SYNC_CURBNK
+	LD	B,BF_SYSSETCPY
+	LD	A,(VGMTMPBNK)
+	LD	C,A
+	LD	E,C
+	LD	A,(VGMCURBNK)
+	LD	D,A
+	LD	HL,128
+	RST	08
+	OR	A
+	JR	NZ,VGM_MMU_LOAD_WIN0_FAIL
+	LD	B,BF_SYSBNKCPY
+	LD	HL,(VGMTMPADR)
+	LD	DE,vgmdata
+	RST	08
+	OR	A
+	JR	NZ,VGM_MMU_LOAD_WIN0_FAIL
+	LD	A,$FF
+	LD	(VGMWINVAL),A
+	OR	A
+	RET
+VGM_MMU_LOAD_WIN0_FAIL:
+	SCF
 	RET
 ;
 ; MMU sanity self-test for VGM streams.
@@ -606,27 +811,45 @@ VGM_MMU_SYNC_HDR:
 VGM_MMU_SELFTEST:
 	LD	A,(VGMMMUMD)
 	OR	A
-	RET	Z
+	JR	NZ,VGM_MMU_SELFTEST_MMU
+	LD	A,(vgmdata)
+	CP	'V'
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
+	LD	A,(vgmdata+1)
+	CP	'g'
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
+	LD	A,(vgmdata+2)
+	CP	'm'
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
+	LD	A,(vgmdata+3)
+	CP	' '
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
+	JP	VGM_MMU_SELFTEST_OK
+VGM_MMU_SELFTEST_MMU:
 	LD	HL,0000H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	CP	'V'
-	JR	NZ,VGM_MMU_SELFTEST_FAIL
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
 	LD	HL,0001H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	CP	'g'
-	JR	NZ,VGM_MMU_SELFTEST_FAIL
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
 	LD	HL,0002H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	CP	'm'
-	JR	NZ,VGM_MMU_SELFTEST_FAIL
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
 	LD	HL,0003H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	CP	' '
-	JR	NZ,VGM_MMU_SELFTEST_FAIL
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
 	LD	B,0
 	LD	HL,0080H
 	CALL	VGM_OFF_INRANGE
@@ -634,17 +857,20 @@ VGM_MMU_SELFTEST:
 	LD	HL,007FH
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	LD	(TMP),A
 	LD	HL,0080H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	LD	HL,007FH
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	LD	E,A
 	LD	A,(TMP)
 	CP	E
-	JR	NZ,VGM_MMU_SELFTEST_FAIL
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
 	LD	B,0
 	LD	HL,0100H
 	CALL	VGM_OFF_INRANGE
@@ -652,22 +878,58 @@ VGM_MMU_SELFTEST:
 	LD	HL,0000H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	LD	(TMP),A
 	LD	HL,0100H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	LD	HL,0000H
 	XOR	A
 	CALL	VGM_MMU_READ_AT
+	JP	C,VGM_MMU_SELFTEST_FAIL
 	LD	E,A
 	LD	A,(TMP)
 	CP	E
-	JR	NZ,VGM_MMU_SELFTEST_FAIL
+	JP	NZ,VGM_MMU_SELFTEST_FAIL
 VGM_MMU_SELFTEST_OK:
 	XOR	A
 	RET
 VGM_MMU_SELFTEST_FAIL:
 	OR	$FF
+	RET
+;
+; If SYSGET app-banks is unavailable (older HBIOS), fill H/L/E like SYS_GETAPPBNKS
+; using BNKINFO + SYS_PEEK into the HCB (same idea as HB_APPBOOT in hbios.asm).
+; Out: H=first app bank, L=count, E=$80 (32KB pages). Returns Z and A=0 on success.
+;
+VGM_MMU_TRY_HCB_APPBNKS:
+	LD	BC,BC_SYSGET_BNKINFO
+	RST	08
+	OR	A
+	RET	NZ
+	LD	A,D
+	LD	(VGMTMPBNK),A		; BIOS bank for SYS_PEEK (RST may clobber D)
+	LD	B,BF_SYSPEEK
+	LD	D,A
+	LD	HL,HCB_LOC + HCB_BIDAPP0
+	RST	08
+	OR	A
+	RET	NZ
+	LD	A,E
+	LD	(TMP),A
+	LD	A,(VGMTMPBNK)
+	LD	D,A
+	LD	B,BF_SYSPEEK
+	LD	HL,HCB_LOC + HCB_APP_BNKS
+	RST	08
+	OR	A
+	RET	NZ
+	LD	L,E
+	LD	A,(TMP)
+	LD	H,A
+	LD	E,$80
+	XOR	A
 	RET
 ;
 ; Initialize VGM MMU state.
@@ -683,7 +945,11 @@ VGM_MMU_INIT:
 	LD	BC,BC_SYSGET_APPBNKS	; query app-bank allocation
 	RST	08
 	OR	A
+	JR	Z,VGM_MMU_INIT_GOTAPP
+	CALL	VGM_MMU_TRY_HCB_APPBNKS
+	OR	A
 	RET	NZ
+VGM_MMU_INIT_GOTAPP:
 	LD	A,L
 	OR	A
 	JR	Z,VGM_MMU_INIT_FAIL	; no app banks available
@@ -694,14 +960,57 @@ VGM_MMU_INIT:
 	LD	(VGMAPPBNK0),A
 	LD	A,L
 	LD	(VGMAPPBNKC),A
+	; Same rule as mmutest/mmulib MMU_INIT: never use the executing bank as
+	; BNKCPY destination storage. If we run in the first app bank, shift the
+	; storage base up by one bank (must still have at least one bank left).
+	LD	A,(VGMCURBNK)
+	LD	B,A
+	LD	A,(VGMAPPBNK0)
+	LD	C,A
+	CP	B
+	JR	Z,VGM_MMU_INIT_SHIFT0
+	LD	A,B
+	CP	C
+	JR	C,VGM_MMU_INIT_OKBNK
+	LD	A,(VGMAPPBNK0)
+	LD	D,A
+	LD	A,(VGMAPPBNKC)
+	ADD	A,D
+	DEC	A
+	CP	B
+	JR	C,VGM_MMU_INIT_OKBNK
+	JR	Z,VGM_MMU_INIT_OKBNK
+	JR	VGM_MMU_INIT_FAIL
+VGM_MMU_INIT_SHIFT0:
+	LD	A,(VGMAPPBNKC)
+	DEC	A
+	JR	Z,VGM_MMU_INIT_FAIL
+	LD	(VGMAPPBNKC),A
+	LD	A,(VGMAPPBNK0)
+	INC	A
+	LD	(VGMAPPBNK0),A
+VGM_MMU_INIT_OKBNK:
 	XOR	A
 	LD	(VGMWINVAL),A
+	LD	(VGMWSTRM),A
 	LD	A,$FF
 	LD	(VGMMMUMD),A
 	XOR	A
 	RET
 VGM_MMU_INIT_FAIL:
 	OR	$FF
+	RET
+;
+; Refresh VGMCURBNK from HBIOS invocation bank (HB_INVBNK). Call before each
+; SETCPY/BNKCPY pair: BDOS and other RST $08 users can leave a different bank
+; active than at VGM_MMU_INIT, so stale VGMCURBNK breaks src/dst bank ids.
+;
+VGM_MMU_SYNC_CURBNK:
+	LD	B,BF_SYSGETBNK
+	RST	08
+	LD	A,C
+	LD	(VGMCURBNK),A
+	OR	A			; clear CY for callers (RST flag hygiene)
 	RET
 ;
 ; Write one 128-byte DMA record from VGMDMABUF to banked VGM storage.
@@ -718,6 +1027,7 @@ VGM_MMU_WRITE_REC:
 VGM_MMU_WRITE_REC0:
 	LD	(VGMTMPBNK),A
 	LD	(VGMTMPADR),HL
+	CALL	VGM_MMU_SYNC_CURBNK	; BDOS/HBIOS may have changed inv bank vs init
 	LD	B,BF_SYSSETCPY
 	LD	A,(VGMTMPBNK)		; destination = app bank for logical offset
 	LD	C,A
@@ -749,6 +1059,60 @@ VGM_LOADSZ_ADD_128:
 	LD	A,(VGMLOADSZ+2)
 	INC	A
 	LD	(VGMLOADSZ+2),A
+	RET
+;
+; After each 128-byte record is written and VGMLOADSZ updated, BNKCPY the
+; whole sector back into vgmdata (same geometry as VGM_MMU_LOAD_WIN0) and
+; compare to PLSRCHBUF. One 128-byte copy avoids per-byte SETCPY edge cases
+; and matches the load path; VGM_MMU_SYNC_CURBNK keeps dest bank current.
+; Returns Z on match, NZ on mismatch or copy error.
+;
+VGM_MMU_VERIFY_LAST_REC:
+	LD	HL,(VGMLOADSZ)
+	LD	A,(VGMLOADSZ+2)
+	OR	A
+	LD	DE,128
+	SBC	HL,DE
+	SBC	A,0
+	LD	(VGMVRBAS),HL
+	LD	(VGMVRBAS+2),A
+	CALL	VGM_MMU_SYNC_CURBNK
+	LD	HL,(VGMVRBAS)
+	LD	A,(VGMVRBAS+2)
+	CALL	VGM_OFF_TO_BNK
+	JR	C,VGM_VRF_FAIL
+	LD	(VGMTMPBNK),A
+	LD	(VGMTMPADR),HL
+	LD	B,BF_SYSSETCPY
+	LD	A,(VGMTMPBNK)
+	LD	C,A
+	LD	E,C
+	LD	A,(VGMCURBNK)
+	LD	D,A
+	LD	HL,128
+	RST	08
+	OR	A
+	JR	NZ,VGM_VRF_FAIL
+	LD	B,BF_SYSBNKCPY
+	LD	HL,(VGMTMPADR)
+	LD	DE,vgmdata
+	RST	08
+	OR	A
+	JR	NZ,VGM_VRF_FAIL
+	LD	HL,vgmdata
+	LD	DE,PLSRCHBUF
+	LD	B,128
+VGM_VRF_LP:
+	LD	A,(DE)
+	CP	(HL)
+	JR	NZ,VGM_VRF_FAIL
+	INC	HL
+	INC	DE
+	DJNZ	VGM_VRF_LP
+	XOR	A
+	RET
+VGM_VRF_FAIL:
+	OR	$FF
 	RET
 ;
 ; Convert 24-bit logical VGM offset to app bank + 15-bit bank address.
@@ -807,80 +1171,136 @@ VGM_OFF_INRANGE_FAIL:
 	SCF
 	RET
 ;
-; Read byte at logical VGM offset A:HL into A using 128-byte cache windows.
-; Returns 66H when offset is out of range or MMU read fails.
+; Read byte at logical VGM offset A:HL.
+; Offsets 0..127 are served from RAM vgmdata (same bytes as VGM_MMU_LOAD_WIN0);
+; avoids SYS_PEEK/HBX_PEEK issues for the common case (stream often starts at 0x40).
+; Offset >= 128: 128-byte BNKCPY window into VGMWINBUF (same engine as verify),
+; tagged by logical base in VGMWBASE; SYS_PEEK fails on some RC2014 builds.
+; VGMVRBAS holds aligned logical block start while filling (reuse after load).
+; Returns NC with data in A on success; CY set and A=0 on out-of-range or error.
 ;
 VGM_MMU_READ_AT:
 	LD	B,A
 	LD	A,L
 	LD	(VGMRDLOW),A
 	CALL	VGM_OFF_INRANGE
-	JR	NC,VGM_MMU_READ_AT0
-	LD	A,66H
+	JR	NC,VGM_MMU_READ_AT1
+	XOR	A
+	SCF
 	RET
-VGM_MMU_READ_AT0:
-	LD	A,(VGMWINVAL)
-	OR	A
-	JR	Z,VGM_MMU_READ_AT_LOAD
-	LD	A,(VGMWBASE+2)
-	CP	B
-	JR	NZ,VGM_MMU_READ_AT_LOAD
-	LD	A,(VGMWBASE+1)
-	CP	H
-	JR	NZ,VGM_MMU_READ_AT_LOAD
+VGM_MMU_READ_AT1:
 	LD	A,(VGMRDLOW)
-	AND	80H
-	LD	C,A
-	LD	A,(VGMWBASE)
-	CP	C
-	JR	NZ,VGM_MMU_READ_AT_LOAD
-	JR	VGM_MMU_READ_AT_FETCH
-VGM_MMU_READ_AT_LOAD:
-	LD	A,(VGMRDLOW)
-	AND	80H
-	LD	(VGMWBASE),A
-	LD	A,H
-	LD	(VGMWBASE+1),A
-	LD	A,B
-	LD	(VGMWBASE+2),A
-	LD	A,(VGMWBASE)
 	LD	L,A
+	LD	A,(VGMMMUMD)
+	OR	A
+	JR	Z,VGM_READ_LIN
 	LD	A,B
+	OR	A
+	JR	NZ,VGM_MMU_READ_SLOW
+	LD	A,H
+	OR	A
+	JR	NZ,VGM_MMU_READ_SLOW
+	LD	A,L
+	CP	80H
+	JR	NC,VGM_MMU_READ_SLOW
+	LD	DE,vgmdata
+	ADD	HL,DE
+	LD	A,(HL)
+	OR	A
+	RET
+VGM_READ_LIN:
+	LD	A,B
+	OR	A
+	JP	NZ,VGM_MMU_READ_AT_FAIL
+	LD	DE,vgmdata
+	ADD	HL,DE
+	JP	C,VGM_MMU_READ_AT_FAIL
+	LD	A,(HL)
+	OR	A
+	RET
+VGM_MMU_READ_SLOW:
+	LD	C,B			; C = offset byte 2
+	LD	E,L
+	LD	A,E
+	AND	7FH
+	LD	(VGMTMPIDX),A
+	LD	E,A
+	LD	A,L
+	SUB	E
+	LD	L,A
+	LD	A,H
+	SBC	A,0
+	LD	H,A
+	LD	A,C
+	SBC	A,0
+	LD	(VGMVRBAS),HL
+	LD	(VGMVRBAS+2),A
+	LD	A,(VGMWSTRM)
+	OR	A
+	JR	Z,VGM_MMU_RD_SLFILL
+	LD	A,(VGMVRBAS)
+	LD	HL,VGMWBASE
+	CP	(HL)
+	JR	NZ,VGM_MMU_RD_SLFILL
+	INC	HL
+	LD	A,(VGMVRBAS+1)
+	CP	(HL)
+	JR	NZ,VGM_MMU_RD_SLFILL
+	INC	HL
+	LD	A,(VGMVRBAS+2)
+	CP	(HL)
+	JR	NZ,VGM_MMU_RD_SLFILL
+	LD	A,(VGMTMPIDX)
+	LD	E,A
+	LD	D,0
+	LD	HL,VGMWINBUF
+	ADD	HL,DE
+	LD	A,(HL)
+	OR	A
+	RET
+VGM_MMU_RD_SLFILL:
+	LD	HL,(VGMVRBAS)
+	LD	A,(VGMVRBAS+2)
 	CALL	VGM_OFF_TO_BNK
 	JR	C,VGM_MMU_READ_AT_FAIL
 	LD	(VGMTMPBNK),A
 	LD	(VGMTMPADR),HL
+	CALL	VGM_MMU_SYNC_CURBNK
 	LD	B,BF_SYSSETCPY
-	LD	A,(VGMTMPBNK)		; source app bank
+	LD	A,(VGMTMPBNK)
 	LD	C,A
 	LD	E,C
-	LD	A,(VGMCURBNK)		; destination current bank
+	LD	A,(VGMCURBNK)
 	LD	D,A
 	LD	HL,128
 	RST	08
 	OR	A
 	JR	NZ,VGM_MMU_READ_AT_FAIL
 	LD	B,BF_SYSBNKCPY
-	LD	HL,(VGMTMPADR)		; source in app bank
-	LD	DE,vgmdata			; destination cache buffer
+	LD	HL,(VGMTMPADR)
+	LD	DE,VGMWINBUF
 	RST	08
 	OR	A
 	JR	NZ,VGM_MMU_READ_AT_FAIL
+	LD	HL,(VGMVRBAS)
+	LD	A,(VGMVRBAS+2)
+	LD	(VGMWBASE),HL
+	LD	(VGMWBASE+2),A
 	LD	A,$FF
-	LD	(VGMWINVAL),A
-VGM_MMU_READ_AT_FETCH:
-	LD	A,(VGMRDLOW)
-	AND	7FH
+	LD	(VGMWSTRM),A
+	LD	A,(VGMTMPIDX)
 	LD	E,A
 	LD	D,0
-	LD	HL,vgmdata
+	LD	HL,VGMWINBUF
 	ADD	HL,DE
 	LD	A,(HL)
+	OR	A
 	RET
 VGM_MMU_READ_AT_FAIL:
 	XOR	A
 	LD	(VGMWINVAL),A
-	LD	A,66H
+	LD	(VGMWSTRM),A
+	SCF
 	RET
 ;
 EXIT	LD	A,(SKIPREQ)		; mute all cards immediately on track navigation
@@ -2269,6 +2689,32 @@ ERRVGMMMU:	; VGM MMU sanity check failed
 	LD	DE,MSGVGMMMU
 	JR	ERR
 ;
+ERRVGMINIT:	; MMU init / app-bank discovery failed (old HBIOS, no banks, etc.)
+	LD	DE,MSGVGMINIT
+	JR	ERR
+;
+ERRVGMAX:	; Banked image larger than app-bank storage
+	LD	DE,MSGVGMAX
+	JR	ERR
+;
+; VGM MMU read failures (distinct messages for hardware diagnosis)
+ERRVGMRD_PRI:	; LOAD_WIN0 at end of banked load (prime vgmdata)
+	LD	DE,MSGVGMRD_PRI
+	JR	ERR
+ERRVGMRD_HDR:	; LOAD_WIN0 inside VGM_MMU_SYNC_HDR (header reload)
+	LD	DE,MSGVGMRD_HDR
+	JR	ERR
+ERRVGMRD_STR:	; VGM_RD_NEXT_EX / command stream read
+	LD	DE,MSGVGMRD_STR
+	JR	ERR
+ERRVGMRD_LPS:	; VGM_MMU_SYNC_HDR after EOS 0x66 (loop path)
+	LD	DE,MSGVGMRD_LPS
+	JR	ERR
+;
+ERRVGMVF:	; MMU readback after write did not match DMA buffer
+	LD	DE,MSGVGMVF
+	JR	ERR
+;
 ERR:	; print error string and return error signal
 	LD	A,(ALLMD)
 	OR	A
@@ -2481,10 +2927,17 @@ VGMAPPBNK0	.DB	0	; first application bank assigned by HBIOS
 VGMAPPBNKC	.DB	0	; number of contiguous application banks
 VGMTMPBNK	.DB	0	; temp selected bank for copy/read operations
 VGMLOADSZ	.DB	0,0,0	; loaded VGM size (24-bit, record-padded)
-VGMWBASE	.DB	0,0,0	; cached window base offset (bit7-aligned, 24-bit)
-VGMWINVAL	.DB	0	; zero=cache invalid, non-zero=cache valid
+VGMWBASE	.DB	0,0,0	; stream: logical base of VGMWINBUF; verify uses own math
+VGMWINVAL	.DB	0	; zero=vgmdata header invalid, non-zero=primed
+VGMRDERR	.DB	0	; non-zero: VGM_MMU_READ_AT failed in stream reader
+VGMVRBAS	.DB	0,0,0	; verify: record base; stream read: temp align scratch
 VGMRDLOW	.DB	0	; low offset byte scratch for read path
 VGMTMPADR	.DW	0	; in-bank address scratch
+VGMWSTRM	.DB	0	; non-zero: VGMWINBUF valid for VGMWBASE logical block
+VGMTMPIDX	.DB	0	; byte index 0..127 in current stream window
+VGMWINBUF	.FILL	128,0	; MMU stream read: 128-byte copy from app banks
+VGMEXP		.DB	0,0,0	; loader temp: expected VGM size from header (24-bit LE)
+VGMCAP		.DB	0,0,0	; loader temp: MMU app-bank capacity (24-bit LE)
 vgmpos		.DB	0,0,0	; byte offset into VGM data stream (24-bit)
 vgmdly		.DW	0	; remaining sample-delay count
 vgmfdly	.DB	12	; effective frame-delay constant (base or base-1)
@@ -2573,7 +3026,7 @@ YM2151DAT	.EQU	YM2151_PRIMARY_DAT	; YM2151 data write (primary)
 YM2151SEL2	.EQU	YM2151_SECONDARY_SEL	; YM2151 register select (secondary, undefined on RCBUS)
 YM2151DAT2	.EQU	YM2151_SECONDARY_DAT	; YM2151 data write (secondary, undefined on RCBUS)
 
-MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b093, 11-May-2026",0
+MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b116, 13-May-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
@@ -2600,6 +3053,14 @@ MSGALL		.DB	"No .PT2/.PT3/.MYM/.VGM files found in current directory!",0
 MSGSIZ		.DB	"Sound file too large to load!",0
 MSGVGMTR	.DB	"VGM file appears truncated/corrupt (header size > loaded size)",0
 MSGVGMMMU	.DB	"VGM MMU read/cache self-test failed",0
+MSGVGMINIT	.DB	"VGM: app-bank setup failed (update RomWBW HBIOS or add APP banks)",0
+MSGVGMAX	.DB	"VGM: exceeds RomWBW app-bank pool (BNKCPY APP slice), not total machine RAM.",13,10
+			.DB	"  Fix: custom HBIOS config with more APP_BNKS or smaller RAM disk, then rebuild ROM.",0
+MSGVGMRD_PRI	.DB	"VGM MMU: prime header failed (LOAD_WIN0 after load)",0
+MSGVGMRD_HDR	.DB	"VGM MMU: header reload failed (LOAD_WIN0 in SYNC_HDR)",0
+MSGVGMRD_STR	.DB	"VGM MMU: stream read failed (128B window / RD_NEXT)",0
+MSGVGMRD_LPS	.DB	"VGM MMU: loop resync failed (SYNC_HDR after 0x66)",0
+MSGVGMVF	.DB	"VGM MMU load verify failed (readback mismatch)",0
 MSGTSHB		.DB	"TurboSound PT3 not supported with --HBIOS",0
 MSGTSHW		.DB	"TurboSound PT3 requires two AY cards at A0H/A1H and 50H/51H (readback at +2)",0
 MSGTSDET	.DB	"TurboSound (2x AY-3-8910) file detected",0
