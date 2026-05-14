@@ -190,8 +190,7 @@ VGM_NEXT:
 	CALL	VGM_RD_NEXT_EX
 	CP	66H			; end / loop
 	JR	NZ,VGM_NEXT1
-	CALL	VGM_MMU_SYNC_HDR
-	JP	C,ERRVGMRD_LPS
+	; Loop offset lives in header bytes 0x1C..0x1F (always in primed vgmdata).
 	LD	A,(vgmdata + 1CH)	; loop offset (relative to 0x1C)
 	LD	E,A
 	LD	A,(vgmdata + 1DH)
@@ -352,6 +351,11 @@ VGM_WAITNN:
 	LD	D,A
 	LD	L,E
 	LD	H,D
+	LD	A,H
+	OR	L
+	JR	NZ,VGM_WAITNN0
+	LD	HL,1			; clamp 0x61 $0000 to one sample tick
+VGM_WAITNN0:
 	LD	(vgmdly),HL
 	LD	A,1
 	OR	A
@@ -393,14 +397,52 @@ VGM_SKIP_CMD:
 	JP	VGM_NEXT
 
 ;===============================================================================
+; VGM_STRETCH_VGMDLY - Per-wait (vgmdly) stretch for musical BPM
+;===============================================================================
+; Inner vgmfdly0*vgmfdlo only scales the DJNZ loop; OPL/MMIO and stream decode
+; dominate wall time, so init-time pack often barely moves a BPM meter. This
+; runs every goVGM_nodelay before accounting: HL := orig + (orig>>4) (~+6.25%).
+;===============================================================================
+VGM_STRETCH_VGMDLY:
+	LD	HL,(vgmdly)
+	LD	A,H
+	OR	L
+	RET	Z
+	LD	B,H
+	LD	C,L			; BC = orig
+	LD	H,B
+	LD	L,C
+	LD	A,4
+VGM_ST_R4:
+	SRL	H
+	RR	L
+	DEC	A
+	JR	NZ,VGM_ST_R4		; HL = orig>>4
+	ADD	HL,BC			; HL = orig + (orig>>4)
+	JR	NC,VGM_ST_STO
+	LD	HL,0FFFFH
+VGM_ST_STO:
+	LD	(vgmdly),HL
+	RET
+
+;===============================================================================
 ; VGM_APPLY_DELAY - Burn CPU cycles to match VGM sample rate (~44.1 KHz)
 ;===============================================================================
 VGM_APPLY_DELAY:
 	LD	HL,(vgmdly)
+	LD	A,H
+	OR	L
+	RET	Z			; 0-sample wait: nothing to burn (avoids DEC wrap hang)
 VGM_DELAY_LOOP:
-	LD	A,(vgmfdly)
+	LD	A,(vgmfdlo)		; outer rounds per sample (extends past DJNZ B max 255)
+	LD	C,A
+VGM_DLY_OUT:
+	LD	A,(vgmfdly0)
 	LD	B,A
-	DJNZ	$
+VGM_DLY0:
+	DJNZ	VGM_DLY0
+	DEC	C
+	JR	NZ,VGM_DLY_OUT
 	DEC	HL
 	LD	A,H
 	OR	L

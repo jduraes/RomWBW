@@ -162,17 +162,19 @@ CurPosCounter	.EQU	0	; 2) Current position counter at (START+11)
 ACBBAC			.EQU	0	; 3) Allow channels allocation bits at (START+10)
 LoopChecker		.EQU	1	; 4) Allow loop checking and disabling
 Id				.EQU	1	; 5) Insert official identificator
-#DEFINE Release "1b001"		; Release number
+; VTBANREL: debug build token only (bNNN). Revision stays literal v0.1 in MSGBAN.
+#DEFINE VTBANREL "b145"
 
 	.ORG	$0100
 ;
 	CALL	CLI_PREP
+	CALL	HEAPENDB_INIT		; load ceiling before banner / any VGM sizing
 	CALL	CLI_HAVE_CREDITS_SWITCH
 	LD	A,(CREDMD)
 	OR	A
 	JR	Z,STARTUP_BANNER
 	PRTCRLF
-	PRTSTRDE(MSGBAN)		; Print to banner message
+	PRTSTRDE(MSGBAN)
 	CALL	CRLF
 	CALL	CRLF
 	PRTSTRDE(MSGCRED)
@@ -184,13 +186,6 @@ STARTUP_BANNER:
 	PRTSTRDE(MSGBAN)		; Print to banner message
 	CALL	PRTCPUKHZBAN		; Print detected CPU speed in MHz
 	CALL	CRLF			; newline after banner
-	; Determine load ceiling from CP/M BDOS entry address.
-	; Bytes 0x0006/0x0007 in page 0 hold the 16-bit BDOS entry (JP dest).
-	; We use (BDOS page - 1) so the load loop stops one 256-byte page
-	; below BDOS, giving a safe margin.
-	LD	A,(7)			; high byte of BDOS entry address
-	DEC	A			; stop one page below BDOS
-	LD	(HEAPENDB),A		; save as runtime load ceiling page
 	CALL	CLI_HAVE_ALL_SWITCH
 	CALL	CLI_HAVE_LOOP_SWITCH
 	CALL	CLI_HAVE_CONFIG_SWITCH
@@ -515,6 +510,17 @@ VGM_MXLX:
 	LD	(VGMCAP),HL
 	RET
 ;
+; From CP/M page 0: high byte of BDOS vector at 7; load stops one page below.
+HEAPENDB_INIT:
+	LD	A,(7)
+	DEC	A
+	LD	(HEAPENDB),A
+	RET
+;
+; Note: CP/M 2 does not provide a portable "bytes free in TPA" query. RomWBW
+; HBIOS SYS_GETMEMINFO (E=32KB RAM bank count) is installed RAM, not free RAM
+; after BDOS/CCP/this program. Do not synthesize a "Free RAM" banner value.
+;
 ; VGM load: first sector in PLSRCHBUF. If header size fits in TPA, load linearly
 ; into vgmdata; else close/reopen and bank-load into MMU app RAM.
 ;
@@ -669,15 +675,6 @@ _LDX0:
 
 #include "mym_runtime.inc"
 
-;
-;===============================================================================
-; goVGM - Play a VGM file
-;===============================================================================
-; Loads and plays a VGM file.  Supports single-chip AY, dual-chip AY (via
-; TS_PORTS1/TS_PORTS2, same hardware as TurboSound), OPL2/OPL3, and SN76489.
-; Keyboard navigation matches the MYM / PT3 player.
-;===============================================================================
-
 #include "vgm_runtime.inc"
 
 VGM_VALIDATE_IMAGE:
@@ -799,104 +796,6 @@ VGM_MMU_LOAD_WIN0:
 	RET
 VGM_MMU_LOAD_WIN0_FAIL:
 	SCF
-	RET
-;
-; MMU sanity self-test for VGM streams.
-; In MMU mode, verifies:
-;   - header magic via MMU reads ('Vgm ')
-;   - cache-window stability across the 0x7F/0x80 boundary
-;   - cache-window stability across 0x0000/0x0100 when available
-; Returns Z on success, NZ on failure.
-;
-VGM_MMU_SELFTEST:
-	LD	A,(VGMMMUMD)
-	OR	A
-	JR	NZ,VGM_MMU_SELFTEST_MMU
-	LD	A,(vgmdata)
-	CP	'V'
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	A,(vgmdata+1)
-	CP	'g'
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	A,(vgmdata+2)
-	CP	'm'
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	A,(vgmdata+3)
-	CP	' '
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	JP	VGM_MMU_SELFTEST_OK
-VGM_MMU_SELFTEST_MMU:
-	LD	HL,0000H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	CP	'V'
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	HL,0001H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	CP	'g'
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	HL,0002H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	CP	'm'
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	HL,0003H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	CP	' '
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	B,0
-	LD	HL,0080H
-	CALL	VGM_OFF_INRANGE
-	JR	C,VGM_MMU_SELFTEST_OK
-	LD	HL,007FH
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	LD	(TMP),A
-	LD	HL,0080H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	LD	HL,007FH
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	LD	E,A
-	LD	A,(TMP)
-	CP	E
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-	LD	B,0
-	LD	HL,0100H
-	CALL	VGM_OFF_INRANGE
-	JR	C,VGM_MMU_SELFTEST_OK
-	LD	HL,0000H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	LD	(TMP),A
-	LD	HL,0100H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	LD	HL,0000H
-	XOR	A
-	CALL	VGM_MMU_READ_AT
-	JP	C,VGM_MMU_SELFTEST_FAIL
-	LD	E,A
-	LD	A,(TMP)
-	CP	E
-	JP	NZ,VGM_MMU_SELFTEST_FAIL
-VGM_MMU_SELFTEST_OK:
-	XOR	A
-	RET
-VGM_MMU_SELFTEST_FAIL:
-	OR	$FF
 	RET
 ;
 ; If SYSGET app-banks is unavailable (older HBIOS), fill H/L/E like SYS_GETAPPBNKS
@@ -1258,6 +1157,9 @@ VGM_MMU_READ_SLOW:
 	LD	A,(HL)
 	OR	A
 	RET
+; When the 128-byte stream window misses, BNKCPY refills VGMWINBUF. That cost is
+; paid inside command decode (before VGM_APPLY_DELAY), so wall time wobbles vs the
+; fixed per-sample DJNZ loop — a BPM meter often shows narrow swing on bank lines.
 VGM_MMU_RD_SLFILL:
 	LD	HL,(VGMVRBAS)
 	LD	A,(VGMVRBAS+2)
@@ -2685,10 +2587,6 @@ ERRVGMTR:	; VGM file is truncated versus header EOF size
 	LD	DE,MSGVGMTR
 	JR	ERR
 ;
-ERRVGMMMU:	; VGM MMU sanity check failed
-	LD	DE,MSGVGMMMU
-	JR	ERR
-;
 ERRVGMINIT:	; MMU init / app-bank discovery failed (old HBIOS, no banks, etc.)
 	LD	DE,MSGVGMINIT
 	JR	ERR
@@ -2706,9 +2604,6 @@ ERRVGMRD_HDR:	; LOAD_WIN0 inside VGM_MMU_SYNC_HDR (header reload)
 	JR	ERR
 ERRVGMRD_STR:	; VGM_RD_NEXT_EX / command stream read
 	LD	DE,MSGVGMRD_STR
-	JR	ERR
-ERRVGMRD_LPS:	; VGM_MMU_SYNC_HDR after EOS 0x66 (loop path)
-	LD	DE,MSGVGMRD_LPS
 	JR	ERR
 ;
 ERRVGMVF:	; MMU readback after write did not match DMA buffer
@@ -2940,11 +2835,13 @@ VGMEXP		.DB	0,0,0	; loader temp: expected VGM size from header (24-bit LE)
 VGMCAP		.DB	0,0,0	; loader temp: MMU app-bank capacity (24-bit LE)
 vgmpos		.DB	0,0,0	; byte offset into VGM data stream (24-bit)
 vgmdly		.DW	0	; remaining sample-delay count
-vgmfdly	.DB	12	; effective frame-delay constant (base or base-1)
-vgmfdly0	.DB	12	; base frame-delay constant from CLKTBL
-vgmfdpos	.DB	0	; dither position [0..vgmfdcyc-1]
-vgmfdlo	.DB	0	; frames/cycle using (vgmfdly0-1)
-vgmfdcyc	.DB	0	; dither cycle length
+vgmfdly	.DB	12	; copy of vgmfdly0 for display / parity with older paths
+vgmfdly0	.DB	12	; inner DJNZ count per outer round (VGM_APPLY_DELAY)
+vgmfdlo	.DB	1	; outer rounds per VGM sample (>=1; product with vgmfdly0 sets tempo)
+vgmfdcyc	.DB	0	; legacy (unused)
+VGMTMPKHZ	.DW	0	; SYSGET/CPUINFO KHz (saved for VGM delay calibration)
+VGMTMPMHZ	.DB	0	; SYSGET/CPUINFO integer MHz index for VGMCLKTBL
+VGMSAMPACC	.DB	0,0,0	; VGM sample timeline for key poll (LE, mod ~0.1s)
 VGMCHIPFLG	.DB	0	; detected VGM chips from header clocks (bitmask)
 VGMDUALFLG	.DB	0	; detected VGM dual-chip markers (bitmask)
 VGMPRNSEP	.DB	0	; non-zero once first VGM chip token was printed
@@ -2974,7 +2871,6 @@ DELCNT		.DB	0	; CONSECUTIVE DELETE KEY PRESS COUNTER
 DELPAUSAV	.DB	0	; SAVED PAUSE STATE FOR DELETE CONFIRM CANCEL
 DELIDX		.DB	0	; SAVED INDEX OF ENTRY SELECTED FOR DELETE
 STOPREQ		.DB	0	; NON-ZERO IF USER ABORTED WITH KEYPRESS
-VGMKEYCHK	.DB	0	; VGM key poll divider (masked to 32-loop cadence)
 SKIPREQ		.DB	0	; NON-ZERO IF USER REQUESTED SKIP TO NEXT TRACK
 PREVREQ		.DB	0	; NON-ZERO IF USER REQUESTED PREVIOUS TRACK
 NAVREQ		.DB	0	; NON-ZERO IF USER REQUESTED MATRIX NAV TRACK CHANGE
@@ -3026,7 +2922,8 @@ YM2151DAT	.EQU	YM2151_PRIMARY_DAT	; YM2151 data write (primary)
 YM2151SEL2	.EQU	YM2151_SECONDARY_SEL	; YM2151 register select (secondary, undefined on RCBUS)
 YM2151DAT2	.EQU	YM2151_SECONDARY_DAT	; YM2151 data write (secondary, undefined on RCBUS)
 
-MSGBAN  .DB  "VibeTune Player for RomWBW v0.1b116, 13-May-2026",0
+MSGBAN:
+	.DB	"VibeTune Player for RomWBW v0.1", VTBANREL, ", 14-May-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
@@ -3037,7 +2934,8 @@ MSGVGMAY	.DB	"AY-3-8910/YM2149",0
 MSGVGMPSG	.DB	"SN76489",0
 MSGVGMPSG2	.DB	"2xSN76489",0
 MSGVGM2151	.DB	"YM2151/OPM",0
-MSGUSE		.DB	"Usage: VTUNE <filename>.[PT2|PT3|MYM|VGM] [-msx|-rc|-coleco] [-delay] [--hbios] [+tn|-tn] [-list] [-loop] [-config] [-credits]",0
+MSGUSE		.DB	"Usage: VTUNE <filename>.[PT2|PT3|MYM|VGM] [-msx|-rc|-coleco] [-delay]"
+			.DB	" [--hbios] [+tn|-tn] [-list] [-loop] [-config] [-credits]",0
 MSGCRED		.DB	"Copyright (C) 2026, Wayne Warthen, GNU GPL v3",13,10
 			.DB	"PTxPlayer Copyright (C) 2004-2007 S.V.Bulba",13,10
 			.DB	"MYMPlay by Marq/Lieves!Tuore",13,10
@@ -3052,14 +2950,12 @@ MSGFIL		.DB	"Sound file not found!",0
 MSGALL		.DB	"No .PT2/.PT3/.MYM/.VGM files found in current directory!",0
 MSGSIZ		.DB	"Sound file too large to load!",0
 MSGVGMTR	.DB	"VGM file appears truncated/corrupt (header size > loaded size)",0
-MSGVGMMMU	.DB	"VGM MMU read/cache self-test failed",0
 MSGVGMINIT	.DB	"VGM: app-bank setup failed (update RomWBW HBIOS or add APP banks)",0
 MSGVGMAX	.DB	"VGM: exceeds RomWBW app-bank pool (BNKCPY APP slice), not total machine RAM.",13,10
 			.DB	"  Fix: custom HBIOS config with more APP_BNKS or smaller RAM disk, then rebuild ROM.",0
 MSGVGMRD_PRI	.DB	"VGM MMU: prime header failed (LOAD_WIN0 after load)",0
 MSGVGMRD_HDR	.DB	"VGM MMU: header reload failed (LOAD_WIN0 in SYNC_HDR)",0
 MSGVGMRD_STR	.DB	"VGM MMU: stream read failed (128B window / RD_NEXT)",0
-MSGVGMRD_LPS	.DB	"VGM MMU: loop resync failed (SYNC_HDR after 0x66)",0
 MSGVGMVF	.DB	"VGM MMU load verify failed (readback mismatch)",0
 MSGTSHB		.DB	"TurboSound PT3 not supported with --HBIOS",0
 MSGTSHW		.DB	"TurboSound PT3 requires two AY cards at A0H/A1H and 50H/51H (readback at +2)",0
@@ -3147,7 +3043,7 @@ VGMCLKTBL:	.DB	1		; 1MHz
 		.DB	7		; 4MHz (+1)
 		.DB	0		; 5MHz
 		.DB	9		; 6MHz (+1)
-		.DB	10		; 7MHz / 7.3728MHz (+1)
+		.DB	10		; 7 MHz / 7.3728 MHz (+1)
 		.DB	11		; 8MHz (+1)
 		.DB	0		; 9MHz
 		.DB	15		; 10MHz (+1)
@@ -3280,9 +3176,7 @@ CurPos	.DB 0 ;for visualization only (i.e. no need for playing)
 
 ;Identifier
 	.IF Id
-	.DB "=Uni PT2 and PT3 Player r."
-	.DB Release
-	.DB "="
+	.DB	"=Uni PT2 and PT3 Player r.", VTBANREL, "="
 	.ENDIF
 
 	.IF LoopChecker

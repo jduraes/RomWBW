@@ -188,11 +188,14 @@ PRT_VGM_TOKEN0:
 	LD	(VGMPRNSEP),A
 	RET
 
-; Setup VGM frame delay from RomWBW CPU index using the same table/dither
-; scheme as the reference VGMPlay implementation.
-; Input: A = CPU index/code from HBIOS SYSGET/CPUINFO.
+; Setup VGM per-sample delay (once per goVGM): table row from integer MHz index,
+; VGM_SCALE_FDLY_KHZ (reported KHz vs nominal MHz*1000), then VGM_PACK_TEMPO_DELAY.
+; Pack applies an empirical rational chain (Q,W,W2,W3,W4) and splits W4 into
+; vgmfdly0 (inner DJNZ) * vgmfdlo (outer rounds); see VGM_PACK_TEMPO_DELAY.
+; Fine BPM: VGM_STRETCH_VGMDLY in vgm_player.inc scales each wait (vgmdly).
+; MMU BNKCPY window refills (VGM_MMU_RD_SLFILL) add irregular CPU during decode.
 VGM_SETFDELAY:
-	PUSH	AF
+	LD	A,(VGMTMPMHZ)
 	LD	HL,VGMCLKTBL-1
 	ADD	A,L
 	LD	L,A
@@ -201,76 +204,296 @@ VGM_SETFDELAY:
 	LD	H,A
 	LD	A,(HL)
 	OR	A
-	JR	NZ,VGM_SETFDELAY0
-	LD	A,10			; safe default for 7MHz-class systems
-VGM_SETFDELAY0:
-	LD	(vgmfdly0),A
-	LD	(vgmfdly),A
+	JR	NZ,VGM_SF_TOK
+	LD	A,10			; safe default for ~7 MHz class if table slot is 0
+VGM_SF_TOK:
+	CALL	VGM_SCALE_FDLY_KHZ
+	CALL	VGM_PACK_TEMPO_DELAY
 	XOR	A
-	LD	(vgmfdpos),A
-	LD	(vgmfdlo),A
 	LD	(vgmfdcyc),A
-	POP	AF
+	RET
+
+; In: A = VGM_SCALE_FDLY_KHZ result (1..255). Out: vgmfdly0, vgmfdlo, vgmfdly.
+; Chain: Q=(20*A+10)/11, W=(Q*119+44)/88, W2=(W*14+5)/11, W3=(W2*57+25)/50,
+;       W4=(W3*44+20)/41; then outer=(W4+254)/255, inner=ceil(W4/outer).
+VGM_PACK_TEMPO_DELAY:
+	LD	E,A
+	LD	D,0
+	LD	HL,0
+	LD	B,20
+VGM_PK_M20:
+	ADD	HL,DE
+	DJNZ	VGM_PK_M20		; HL = 20*A
+	LD	DE,10
+	ADD	HL,DE			; round for /11
+	LD	BC,11
+	LD	DE,0
+VGM_PK_D11:
+	LD	A,H
+	OR	L
+	JR	Z,VGM_PK_Q
+	OR	A
+	SBC	HL,BC
+	JR	C,VGM_PK_D11B
+	INC	DE
+	JR	VGM_PK_D11
+VGM_PK_D11B:
+	ADD	HL,BC
+VGM_PK_Q:
+	PUSH	DE
+	POP	HL			; HL = Q
+	EX	DE,HL			; DE = Q
+	LD	HL,0
+	LD	B,119
+VGM_PK_M119:
+	ADD	HL,DE
+	DJNZ	VGM_PK_M119
+	LD	DE,44
+	ADD	HL,DE
+	LD	BC,88
+	LD	DE,0
+VGM_PK_D88:
+	LD	A,H
+	OR	L
+	JR	Z,VGM_PK_W0
+	OR	A
+	SBC	HL,BC
+	JR	C,VGM_PK_D88B
+	INC	DE
+	JR	VGM_PK_D88
+VGM_PK_D88B:
+	ADD	HL,BC
+VGM_PK_W0:
+	PUSH	DE
+	POP	HL			; HL = W
+	LD	A,H
+	OR	L
+	JR	NZ,VGM_PK_WOK
+	INC	L			; W >= 1
+VGM_PK_WOK:
+	EX	DE,HL			; DE = W
+	LD	HL,0
+	LD	B,14
+VGM_PK_M14:
+	ADD	HL,DE
+	DJNZ	VGM_PK_M14
+	LD	DE,5
+	ADD	HL,DE			; round half for /11
+	LD	BC,11
+	LD	DE,0
+VGM_PK_DW2:
+	LD	A,H
+	OR	L
+	JR	Z,VGM_PK_W1
+	OR	A
+	SBC	HL,BC
+	JR	C,VGM_PK_DW2B
+	INC	DE
+	JR	VGM_PK_DW2
+VGM_PK_DW2B:
+	ADD	HL,BC
+VGM_PK_W1:
+	PUSH	DE
+	POP	HL			; HL = W2
+	LD	A,H
+	OR	L
+	JR	NZ,VGM_PK_W2OK
+	INC	L			; W2 >= 1
+VGM_PK_W2OK:
+	EX	DE,HL			; DE = W2
+	LD	HL,0
+	LD	B,57
+VGM_PK_M57:
+	ADD	HL,DE
+	DJNZ	VGM_PK_M57
+	LD	DE,25
+	ADD	HL,DE			; round half for /50
+	LD	BC,50
+	LD	DE,0
+VGM_PK_DW3:
+	LD	A,H
+	OR	L
+	JR	Z,VGM_PK_W3
+	OR	A
+	SBC	HL,BC
+	JR	C,VGM_PK_DW3B
+	INC	DE
+	JR	VGM_PK_DW3
+VGM_PK_DW3B:
+	ADD	HL,BC
+VGM_PK_W3:
+	PUSH	DE
+	POP	HL			; HL = W3
+	LD	A,H
+	OR	L
+	JR	NZ,VGM_PK_W3OK
+	INC	L
+VGM_PK_W3OK:
+	EX	DE,HL			; DE = W3
+	LD	HL,0
+	LD	B,44
+VGM_PK_M44:
+	ADD	HL,DE
+	DJNZ	VGM_PK_M44
+	LD	DE,20
+	ADD	HL,DE			; round half for /41
+	LD	BC,41
+	LD	DE,0
+VGM_PK_DW4:
+	LD	A,H
+	OR	L
+	JR	Z,VGM_PK_W4
+	OR	A
+	SBC	HL,BC
+	JR	C,VGM_PK_DW4B
+	INC	DE
+	JR	VGM_PK_DW4
+VGM_PK_DW4B:
+	ADD	HL,BC
+VGM_PK_W4:
+	PUSH	DE
+	POP	HL			; HL = W4
+	LD	A,H
+	OR	L
+	JR	NZ,VGM_PK_W4OK
+	INC	L
+VGM_PK_W4OK:
+	; outer = ceil(W4/255) via (W4+254)/255
+	PUSH	HL
+	LD	DE,254
+	ADD	HL,DE
+	LD	DE,255
+	LD	B,0
+VGM_PK_D255:
+	LD	A,H
+	OR	L
+	JR	Z,VGM_PK_D255X
+	OR	A
+	SBC	HL,DE
+	JR	C,VGM_PK_D255B
+	INC	B
+	JR	VGM_PK_D255
+VGM_PK_D255B:
+	ADD	HL,DE
+VGM_PK_D255X:
+	POP	HL			; HL = W4
+	LD	A,B
+	OR	A
+	JR	NZ,VGM_PK_O0
+	LD	B,1
+VGM_PK_O0:
+	LD	A,B
+	LD	(TMP),A		; outer 1..255
+	; HL = W4 + outer - 1, then inner = HL / outer
+	LD	E,A
+	LD	D,0
+	DEC	DE			; DE = outer-1
+	LD	A,D
+	OR	E
+	JR	Z,VGM_PK_SKAD
+	ADD	HL,DE
+VGM_PK_SKAD:
+	LD	A,(TMP)
+	LD	E,A
+	LD	D,0
+	LD	C,0
+VGM_PK_DOUT:
+	LD	A,H
+	OR	L
+	JR	Z,VGM_PK_DOUTX
+	OR	A
+	SBC	HL,DE
+	JR	C,VGM_PK_DOUTB
+	INC	C
+	JR	VGM_PK_DOUT
+VGM_PK_DOUTB:
+	ADD	HL,DE
+VGM_PK_DOUTX:
+	LD	A,C
+	OR	A
+	JR	NZ,VGM_PK_I0
+	LD	A,1
+VGM_PK_I0:
+	CP	255
+	JR	C,VGM_PK_IC
+	LD	A,255
+VGM_PK_IC:
+	LD	(vgmfdly0),A
+	LD	A,(TMP)
+	LD	(vgmfdlo),A
+VGM_PK_FIN:
 	LD	A,(vgmfdly0)
+	LD	(vgmfdly),A
+	RET
+
+; In: A = table inner-loop count (non-zero). Uses VGMTMPMHZ, VGMTMPKHZ, TMP.
+; Out: A = scaled count, clamped 1..255.
+VGM_SCALE_FDLY_KHZ:
+	LD	(TMP),A
+	LD	A,(VGMTMPMHZ)
+	OR	A
+	LD	C,A
+	JR	NZ,VGM_SK_MHZ
+	LD	C,1
+VGM_SK_MHZ:
+	LD	B,C
+	LD	HL,0
+	LD	DE,1000
+VGM_SK_NK:
+	ADD	HL,DE
+	DJNZ	VGM_SK_NK
+	PUSH	HL			; nominal KHz = MHz*1000
+	LD	A,(TMP)
 	LD	B,A
-	CP	10
-	JR	NZ,VGM_SETFD11
-	LD	A,25
-	LD	(vgmfdcyc),A
-	LD	A,7
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD11:
-	LD	A,B
-	CP	11
-	JR	NZ,VGM_SETFD14
-	LD	A,4
-	LD	(vgmfdcyc),A
+	LD	HL,0
+	LD	DE,(VGMTMPKHZ)
+VGM_SK_PR:
+	ADD	HL,DE
+	DJNZ	VGM_SK_PR		; HL = T * reported KHz
+	POP	BC			; BC = nominal KHz
+	LD	A,H
+	OR	L
+	JR	Z,VGM_SK_QZ
+	XOR	A
+	LD	E,0
+VGM_SK_DV:
+	LD	D,H
+	LD	A,L
+	OR	D
+	JR	Z,VGM_SK_D0
+	OR	A
+	SBC	HL,BC
+	JR	C,VGM_SK_DB
+	INC	E
+	JR	VGM_SK_DV
+VGM_SK_DB:
+	ADD	HL,BC
+VGM_SK_D0:
+	LD	A,E
+	OR	A
+	JR	Z,VGM_SK_MIN1
+	LD	D,A			; D = quotient
+	LD	A,H
+	OR	L
+	JR	Z,VGM_SK_CAP0
+	PUSH	BC
+	ADD	HL,HL
+	OR	A
+	SBC	HL,BC
+	POP	BC
+	JR	C,VGM_SK_CAP0
+	INC	D
+VGM_SK_CAP0:
+	LD	A,D
+	JR	VGM_SK_CAP
+VGM_SK_QZ:
+	XOR	A
+VGM_SK_MIN1:
+	OR	A
+	JR	NZ,VGM_SK_CAP
 	LD	A,1
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD14:
-	LD	A,B
-	CP	14
-	JR	NZ,VGM_SETFD15
-	LD	A,3
-	LD	(vgmfdcyc),A
-	LD	A,1
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD15:
-	LD	A,B
-	CP	15
-	JR	NZ,VGM_SETFD16
-	LD	A,20
-	LD	(vgmfdcyc),A
-	LD	A,7
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD16:
-	LD	A,B
-	CP	16
-	JR	NZ,VGM_SETFD17
-	LD	A,8
-	LD	(vgmfdcyc),A
-	LD	A,3
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD17:
-	LD	A,B
-	CP	17
-	JR	NZ,VGM_SETFD23
-	LD	A,5
-	LD	(vgmfdcyc),A
-	LD	A,2
-	LD	(vgmfdlo),A
-	RET
-VGM_SETFD23:
-	LD	A,B
-	CP	23
-	RET	NZ
-	LD	A,13
-	LD	(vgmfdcyc),A
-	LD	A,7
-	LD	(vgmfdlo),A
+VGM_SK_CAP:
+	CP	255
+	RET	C
+	LD	A,255
 	RET

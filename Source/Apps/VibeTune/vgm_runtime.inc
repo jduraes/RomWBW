@@ -1,11 +1,8 @@
 ;
-; VGM runtime wrappers (goVGM playback loop + control handling).
-; Extracted from vibetune.asm without behavior changes.
+; VGM runtime: goVGM (validate, CPU delay setup, playback loop, sample-based key poll).
 ;
 goVGM:
 	CALL	VGM_VALIDATE_IMAGE	; header / stream bounds vs loaded image
-	CALL	VGM_MMU_SELFTEST	; MMU: cache sanity; linear: 'Vgm ' at vgmdata
-	JP	NZ,ERRVGMMMU
 
 	; Probe AY chip ports into TS_PORTS1/TS_PORTS2 (same as TurboSound PT3)
 	ISHBIOS
@@ -23,8 +20,10 @@ goVGM_portsfb:
 
 goVGM_fdly:
 	LD	BC,$F8F0		; HBIOS SYSGET/CPUINFO
-	RST	08			; L := CPU index/code
+	RST	08			; L := MHz index, DE := KHz (see SYS_GETCPUINFO)
+	LD	(VGMTMPKHZ),DE
 	LD	A,L
+	LD	(VGMTMPMHZ),A
 	CALL	VGM_SETFDELAY
 goVGM_fd_done:
 
@@ -44,7 +43,9 @@ goVGM_fd_done:
 	LD	HL,0
 	LD	(vgmdly),HL
 	XOR	A
-	LD	(VGMKEYCHK),A		; poll keyboard every 32 loops (responsive, low overhead)
+	LD	(VGMSAMPACC),A
+	LD	(VGMSAMPACC+1),A
+	LD	(VGMSAMPACC+2),A
 
 	; Print VGM metadata block before "Playing..."
 	LD	A,(UI_ACTIVE)
@@ -79,21 +80,7 @@ goVGM_flush:
 goVGM_lp:
 	CALL	VGM_PLAY_FRAME		; process commands until next wait
 	JP	Z,goVGM_done		; Z = end of stream (no loop)
-
-	; Check for keypress every 32 loops.
-	LD	A,(VGMKEYCHK)
-	DEC	A
-	AND	01FH
-	LD	(VGMKEYCHK),A
-	JP	NZ,goVGM_nodelay
-	LD	D,1
-	CALL	PLAYBACK_PLAY_STEP
-	LD	A,B
-	OR	A
-	JP	Z,goVGM_nodelay
-	CP	2
-	JP	Z,goVGM_pause_wait
-	JP	goVGM_exit_mute
+	JP	goVGM_nodelay
 
 goVGM_pause_toggle:
 	CALL	KEY_TOGGLE_PAUSE
@@ -117,30 +104,52 @@ goVGM_pause_off:
 	JP	goVGM_nodelay
 
 goVGM_nodelay:
-	LD	A,(vgmfdcyc)
+	CALL	VGM_STRETCH_VGMDLY
+	; Key/pause poll on a fixed sample timeline (~4410 samples ~= 0.1 s @ 44.1 kHz)
+	; so poll spacing tracks vgmdly instead of "every N VGM waits".
+	LD	HL,(vgmdly)
+	LD	A,H
+	OR	L
+	JR	Z,goVGM_nd_noacc
+	LD	DE,(VGMSAMPACC)
+	LD	A,(VGMSAMPACC+2)
+	ADD	HL,DE
+	ADC	A,0
+	LD	(VGMSAMPACC),HL
+	LD	(VGMSAMPACC+2),A
+goVGM_nd_acloop:
+	LD	HL,(VGMSAMPACC)
+	LD	A,(VGMSAMPACC+2)
 	OR	A
-	JR	Z,goVGM_nodelay_base
-	LD	B,A
-	LD	A,(vgmfdpos)
-	INC	A
-	CP	B
-	JR	C,goVGM_nodelay_posok
-	XOR	A
-goVGM_nodelay_posok:
-	LD	(vgmfdpos),A
-	LD	C,A
-	LD	A,(vgmfdlo)
-	CP	C
-	JR	Z,goVGM_nodelay_base
-	JR	C,goVGM_nodelay_base
+	JR	NZ,goVGM_nd_sub4410
+	PUSH	HL
+	LD	DE,4410
+	OR	A
+	SBC	HL,DE
+	POP	HL
+	JR	C,goVGM_nd_noacc
+goVGM_nd_sub4410:
+	LD	HL,(VGMSAMPACC)
+	LD	A,(VGMSAMPACC+2)
+	LD	DE,4410
+	OR	A
+	SBC	HL,DE
+	SBC	A,0
+	LD	(VGMSAMPACC),HL
+	LD	(VGMSAMPACC+2),A
+	LD	D,1
+	CALL	PLAYBACK_PLAY_STEP
+	LD	A,B
+	OR	A
+	JR	Z,goVGM_nd_acloop
+	CP	2
+	JP	Z,goVGM_pause_wait
+	JP	goVGM_exit_mute
+goVGM_nd_noacc:
+	; Constant inner-byte delay (no dither): avoids subtle tempo wobble from
+	; alternating vgmfdly0 vs vgmfdly0-1 across frame boundaries.
 	LD	A,(vgmfdly0)
-	DEC	A
 	LD	(vgmfdly),A
-	JR	goVGM_nodelay_apply
-goVGM_nodelay_base:
-	LD	A,(vgmfdly0)
-	LD	(vgmfdly),A
-goVGM_nodelay_apply:
 	CALL	VGM_APPLY_DELAY
 	JP	goVGM_lp
 
@@ -154,5 +163,4 @@ goVGM_exit_mute:
 ; Validate VGM header (EOF field sanity, stream start vs loaded image).
 ; Physical loaded size (VGMLOADSZ) is authoritative; header EOF may overshoot.
 ;
-
 

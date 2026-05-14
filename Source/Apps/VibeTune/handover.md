@@ -109,6 +109,19 @@ This is currently the highest-value hypothesis to validate first.
 - `vibetune.asm:813` (`VGM_MMU_READ_AT`)
 - `vibetune.asm:819`, `vibetune.asm:883` (`66h` error return)
 - `vibetune.asm:2268`, `vibetune.asm:2602` (MMU error reporting)
+- `vgm_hw.inc` (`VGM_SETFDELAY`, `VGM_PACK_TEMPO_DELAY`, `VGM_SCALE_FDLY_KHZ`)
+- `vgm_player.inc` (`VGM_STRETCH_VGMDLY`, `VGM_APPLY_DELAY`)
+
+## VGM playback tempo (OPL / `gone.vgm`, ~May 2026)
+
+Calibrated against a stable **~88 BPM** reference on real hardware.
+
+- **`SYS_GETCPUINFO`** (`$F8F0`): save **`DE`** (KHz) and **`L`** (integer MHz index) to **`VGMTMPKHZ` / `VGMTMPMHZ`** before **`VGM_SETFDELAY`** so delay is not tied to truncated MHz only (`vgm_runtime.inc`, `vgm_hw.inc`).
+- **`VGM_SCALE_FDLY_KHZ`**: scales **`VGMCLKTBL`** inner count by reported KHz vs nominal **MHz×1000** (`vgm_hw.inc`).
+- **`VGM_PACK_TEMPO_DELAY`**: empirical rational chain then packs into **`vgmfdly0`** (inner **`DJNZ`**) × **`vgmfdlo`** (outer rounds per sample); **`VGM_APPLY_DELAY`** nests those loops (`vgm_player.inc`). Integer packing can plateau across small ratio tweaks.
+- **`VGM_STRETCH_VGMDLY`**: each wait’s **`(vgmdly)`** is **`orig + (orig>>4)`** (~**+6.25%**); this is the lever that reliably moves measured BPM because decode and OPL I/O dominate wall time vs the inner delay loop alone.
+- **Key poll**: **`VGMSAMPACC`** in **`goVGM_nodelay`** keys off sample time (~4410-sample threshold), not VGM frame count (`vgm_runtime.inc`).
+- **Jitter**: **`VGM_MMU_RD_SLFILL`** (`vibetune.asm`) performs **`SYSSETCPY` / `SYSBNKCPY`** on 128-byte stream window misses; that cost sits in **`VGM_PLAY_FRAME`**, not **`VGM_APPLY_DELAY`**, so BPM meters may show mild swing at bank boundaries.
 
 ## Definition of Done for this workstream
 - `goneshrt.vgm` plays audible audio on RC2014 without immediate false `Done`.
