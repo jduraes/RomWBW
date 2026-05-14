@@ -1,5 +1,5 @@
 ;-------------------------------------------------------------------------
-; TurboSound runtime/context helpers (code-only extraction)
+; TurboSound runtime/context helpers 
 ;-------------------------------------------------------------------------
 
 ; Initialize both packed PT3 modules as independent instances.

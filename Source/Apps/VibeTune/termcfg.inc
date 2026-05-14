@@ -1,5 +1,5 @@
 ;
-; Local copy of shared terminal config helper for Tune build.
+; Local copy of shared terminal config helper for VibeTune build.
 ; Source of truth: Source/Apps/lib/termcfg.inc
 ;
 
