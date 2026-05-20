@@ -1,3 +1,8 @@
+Version 3.7
+-----------
+- ???: Added support for MECB platform
+- WBW: Split SDMODE_PIO into SDMODE_ZPIO & SDMODE_GPIO
+
 Version 3.6
 -----------
 - RDG: Added VDA driver for Xosera FPGA-based VDC
