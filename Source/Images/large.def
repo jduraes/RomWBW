@@ -1,0 +1,12 @@
+# large.def
+# 9-slice aggregate image definition for BuildDsk.ps1
+# Each line is a slice name corresponding to Binary/hd1k_<slice>.img
+nzcom
+dos65
+tpascal
+z80asm
+zpm3
+games
+msxroms1
+msxroms2
+z3plus
