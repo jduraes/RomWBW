@@ -42,8 +42,6 @@ Build Outputs
 -------------
 Build.cmd and Makefile produce these binaries:
 - VTUNE.COM (WBW)
-- VTUNEZX.COM (ZX)
-- VTUNEMSX.COM (MSX)
 
 Build
 -----

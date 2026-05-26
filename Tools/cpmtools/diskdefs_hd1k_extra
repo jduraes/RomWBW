@@ -1,0 +1,25 @@
+# Extra hd1k combo slices (4=ZPM3, 5=WP). Offset = 128 + (1024 * slice_num) tracks.
+
+diskdef wbw_hd1k_4
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 4224T
+  os 2.2
+end
+
+diskdef wbw_hd1k_5
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 5248T
+  os 2.2
+end

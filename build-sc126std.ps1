@@ -32,10 +32,10 @@ try {
     # Display results
     Write-Host "`nBuild completed!" -ForegroundColor Green
     Write-Host "`nROM files in Binary/:" -ForegroundColor Cyan
-    ls Binary/sc126std.* 2>/dev/null | ForEach-Object { Write-Host "  - $_" }
+    Get-ChildItem Binary/sc126std.* -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  - $_" }
     
     Write-Host "`nhd1k disk images in Binary/:" -ForegroundColor Cyan
-    ls Binary/hd1k_*.img 2>/dev/null | ForEach-Object { Write-Host "  - $_" }
+    Get-ChildItem Binary/hd1k_*.img -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  - $_" }
 }
 catch {
     Write-Host "`nBuild failed with error: $_" -ForegroundColor Red

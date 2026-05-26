@@ -27,38 +27,14 @@
 ;     time variations in each quark loop resulting from data decompression.
 ;     An average quark processing time is assumed in each loop.
 ;   - Most sound files originally targeted MSX or ZX Spectrum which used
-;     1.7897725 MHz and 1.773400 MHz respectively for the PSG clock.  For best
+;     1.7897725 MHz and 1.773400 MHz respectively for the PSG clock.  For best 
 ;     sound playback, PSG should be run at approx. this clock rate.
 ;_______________________________________________________________________________
 ;
 ; Change Log:
-;   2018-01-26 [WBW] Initial release
-;   2018-01-28 [WBW] Added support for MYM sound files
-;   2019-11-21 [WBW] Added table-driven configuration
-;   2020-02-11 [WBW] Made hardware config & detection more flexible
-;   2020-03-29 [WBW] Fix error in Z180 I/O W/S bracketing
-;   2020-04-25 [DEN] Added support to use HBIOS Sound driver
-;   2020-05-02 [PMS] Add support for SBC-V2 slow-io hack
-;   2020-09-03 [E?B] Add support for Ed Brindley YM/AY Sound Card v6
-;   2021-08-13 [WBW] Add support for LiNC Z50 Sound Card
-;   2021-08-17 [WBW] When playing via HBIOS, call BF_SNDRESET at end
-;   2022-03-20 [DDW] Add support for MBC PSG module
-;   2023-03-30 [WBW] Fix for quark delay adjustment being trashed
-;   2024-02-23 [WBW] Include ACR value in config table
-;   2024-04-16 [WBW] Add support for NABU AY-3-8910
-;   2024-05-10 [WBW] Hack to avoid corrupting bits 6&7 of PSG R7 for NABU!
-;   2024-07-08 [WBW] Add support for Les Bird's Graphics, Sound, Joystick
-;   2024-07-11 [WBW] Updated, Les Bird's module now uses same settings as EB6
-;   2024-09-17 [WBW] Add support for HEATH H8 with Les Bird's MSX Card
-;   2024-12-12 [WBW] Add options to force standard MSX or RC ports
-;   2025-05-28 [WBW] Add option to force delay mode
-;   2026-01-24 [WBW] Support RC2014 platform id
-;   2026-01-31 [WBW] Update MUTE function to zero all PSG registers
-;   2026-02-03 [JMD] Add RCZ80 Coleco (50H/51H/52H) and MSX (A0H/A1H) auto-detect
-;                    using rc2014-ym2149 MSX/Coleco read-back port (base+2),
-;                    add -coleco CLI/ports mode
-;	2026-02-17 [JMD] Add support for playing TurboSound files when the system has
-;					 two sound cards (in Coleco and MSX addressing mode)
+;
+;   Changes prior to these dates will reside in TUNE.COM
+; 
 ;   2026-04-08 [JMD] Branched out of TUNE into VIBETUNE as of TUNE.COM v3.2 for RomWBW
 ;					 The App will... to-do
 ;   2026-04-09 [JMD] Add VGM file format support (AY-3-8910 single/dual chip, OPL2/OPL3, SN76489)

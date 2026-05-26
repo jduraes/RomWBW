@@ -1,0 +1,74 @@
+# hd1k slices on a Windows volume (L:) whose partition starts after the 1 MB prefix.
+# Slice N offset = 1024 * N tracks (no +128T; the volume already begins at slice 0).
+
+diskdef wbw_hd1k_vol_0
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 0T
+  os 2.2
+end
+
+diskdef wbw_hd1k_vol_1
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 1024T
+  os 2.2
+end
+
+diskdef wbw_hd1k_vol_2
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 2048T
+  os 2.2
+end
+
+diskdef wbw_hd1k_vol_3
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 3072T
+  os 2.2
+end
+
+diskdef wbw_hd1k_vol_4
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 4096T
+  os 2.2
+end
+
+diskdef wbw_hd1k_vol_5
+  seclen 512
+  tracks 1024
+  sectrk 16
+  blocksize 4096
+  maxdir 1024
+  skew 0
+  boottrk 2
+  offset 5120T
+  os 2.2
+end

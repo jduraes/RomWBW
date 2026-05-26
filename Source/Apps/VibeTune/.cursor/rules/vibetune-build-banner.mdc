@@ -1,29 +1,37 @@
 ---
-description: VibeTune — bump debug build token, fixed v0.1 revision, real machine date on release builds
-globs: "**/*"
-alwaysApply: true
+description: VibeTune banner — local bNNN only; never change versions for RomWBW builds
+globs: vibetune.asm
+alwaysApply: false
 ---
 
-# VibeTune build banner (`vibetune.asm`)
+# VibeTune build banner
 
-Whenever you produce or refresh **`vtune.com`** (e.g. after meaningful changes, or when the user asks for a build), do **both** of the following **before** running **`Build.cmd`** in this folder:
+## RomWBW builds — do not touch versions
 
-## 1. Bump the debug build number only (every build)
+When the user is building **RomWBW** (full tree, HBIOS, **`Source/Build.cmd`**, platform ROMs, release prep, or anything outside **VibeTune-only** hacking):
 
-- Update **`#DEFINE VTBANREL "bNNN"`** only (one token: leading **`b`** + incrementing build number). Examples: **`b144`**, **`b145`**.
-- **`VTBANREL` must not carry the software revision.** It is only the rolling debug/build counter.
-- **Software revision** stays **`0.1`** until the user explicitly requests a revision change. That revision lives as the literal **`v0.1`** in **`MSGBAN`** (see **`MSGBAN`** `.DB` line: **`"…RomWBW v0.1"`** then **`VTBANREL`**, so the printed form is e.g. **`v0.1b145`**).
-- **`VTBANREL`** is also expanded in the **PT3 ident** string (`...Player r.` + token + `=`).
+- **Do not** edit **`#DEFINE VTBANREL`**, **`MSGBAN`**, **`ver.inc`**, or any version/date strings in **`vibetune.asm`**.
+- **Do not** add or increment **`bNNN`** tokens for RomWBW. That scheme must **not** be applied to RomWBW release numbering.
+- **RomWBW release versions are set by Wayne Warthen** (e.g. via **`Source/ver.inc`** and upstream release process). Agents do not choose or bump RomWBW version numbers.
+- You may run **`Build.cmd`** if asked; use the sources **as committed**.
 
-Do **not** add scripts or generated `.inc` files for versioning unless the user explicitly asks for that.
+This rule does **not** change how RomWBW is compiled. No extra TASM flags or build parameters.
 
-## 2. Banner date = machine “today”, not chat metadata
+---
 
-- **Never** trust Cursor’s injected “Today’s date” / session metadata for the banner string.
-- **Do** use the actual calendar date on the user’s machine (e.g. run `Get-Date -Format 'dd-MMM-yyyy'` in PowerShell, or the host OS equivalent) and put that exact string in **`MSGBAN`** after the comma (e.g. `…v0.1b145, 14-May-2026`).
+## VibeTune-only development — `bNNN` and date (only here)
 
-If the shell date is unavailable or ambiguous, ask the user for the date string to embed.
+Apply **only** when the user is clearly doing **standalone VibeTune** work (feature/fix in this app, refresh **`vtune.com`**, and **not** a RomWBW release build).
+
+Before **`Build.cmd`** in this folder:
+
+1. **Bump** **`#DEFINE VTBANREL "bNNN"`** only (debug counter; revision stays literal **`v0.1`** in **`MSGBAN`** → e.g. **`v0.1b145`**). Also used in the PT3 ident string.
+2. **Date:** put the machine’s today in **`MSGBAN`** (e.g. `Get-Date -Format 'dd-MMM-yyyy'`). Never use Cursor session “today” metadata.
+
+Do **not** add version scripts or generated `.inc` files unless the user asks.
+
+---
 
 ## Workspace note
 
-When the workspace root is the **RomWBW** repo, the same policy is mirrored at **`.cursor/rules/vibetune-build-banner.mdc`** (repo root) with RomWBW-relative paths.
+RomWBW repo copy: **`.cursor/rules/vibetune-build-banner.mdc`** (repo root).

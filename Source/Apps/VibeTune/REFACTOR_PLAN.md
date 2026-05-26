@@ -26,6 +26,7 @@ This section identifies the constituent parts and their responsibilities.
 - `printing.inc`: ~175 lines
 - `timing.inc`: ~64 lines
 - `strings.inc`: ~35 lines
+- others
 
 ### 2.2 Functional components
 1. Startup and runtime orchestration
