@@ -14,6 +14,7 @@ gomym0
 	ld	de,125				; Avg TS / quark = ~5000, so 125 delay loops
 	sbc	hl,de				; Adjust for file type
 	ld	(QDLY),hl			; Save updated quark delay factor
+	call	VT_APPLY_DLY_BIAS
 	;ld	bc,(rows)
 	;call	PRTHEXWORD
 	call	mymini			; Initialize player

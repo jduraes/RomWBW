@@ -66,6 +66,27 @@ SETDLY:
 	RET
 
 ;
+; Delay-mode tempo trim for Z80 systems without a hardware quark timer.
+; Subtracts a small fixed bias from QDLY so playback matches timer-mode tempo.
+; Timer mode (WMOD != 0) is unchanged.
+;
+VT_DLY_BIAS	.EQU	52		; ~2% at 7.3 MHz (~2650 delay loops)
+
+VT_APPLY_DLY_BIAS:
+	LD	A,(WMOD)
+	OR	A
+	RET	NZ
+	LD	HL,(QDLY)
+	LD	DE,VT_DLY_BIAS
+	OR	A
+	SBC	HL,DE
+	JP	PE,VT_APPLY_DLY_BIAS_OK
+	LD	HL,0
+VT_APPLY_DLY_BIAS_OK:
+	LD	(QDLY),HL
+	RET
+
+;
 ; Get a keystroke from CPM
 ;
 GETKEY	LD	C,6		; BDOS direct I/O

@@ -58,12 +58,18 @@ HBGM_C50:
 	JR	HBGM_SETBIT
 HBGM_CD8:
 	CP	PSG_RCEB_RSEL
+	JR	Z,HBGM_SET_RCEB
+	CP	PSG_RCEB_Z180_RSEL
 	JR	NZ,HBGM_CD1
+HBGM_SET_RCEB:
 	LD	A,4
 	JR	HBGM_SETBIT
 HBGM_CD1:
 	CP	PSG_RCMF_RSEL
+	JR	Z,HBGM_SET_RCMF
+	CP	PSG_RCMF_Z180_RSEL
 	JR	NZ,HBGM_NXT
+HBGM_SET_RCMF:
 	LD	A,8
 HBGM_SETBIT:
 	LD	C,A
@@ -141,7 +147,7 @@ HBSA_PREF:
 	JR	NZ,HBSA_DO_RCEB
 	BIT	3,B
 	JR	NZ,HBSA_DO_RCMF
-	JR	HBSA_FAIL
+	JP	HBSA_FAIL
 	;
 	; Record current platform id in active config
 	;
@@ -168,16 +174,46 @@ HBSA_DO_COLECO:
 	LD	HL,HWSTR_COLECO
 	JR	HBSA_APPLY
 HBSA_DO_RCEB:
+	CALL	HBSA_SETPLT
+	LD	HL,HWSTR_RCEB
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JR	Z,HBSA_RCEB_Z180
+	CP	PLT_RCZ180
+	JR	Z,HBSA_RCEB_Z180
 	LD	A,PSG_RCEB_RSEL
 	LD	D,PSG_RCEB_RDAT
 	LD	E,PSG_RCEB_RIN
-	LD	HL,HWSTR_RCEB
+	JR	HBSA_APPLY
+HBSA_RCEB_Z180:
+	LD	A,PSG_RCEB_Z180_RSEL
+	LD	D,PSG_RCEB_Z180_RDAT
+	LD	E,PSG_RCEB_Z180_RIN
+	PUSH	AF			; save RSEL before clobbering A for Z180
+	LD	A,Z180_RCZ180
+	LD	(Z180),A
+	POP	AF
 	JR	HBSA_APPLY
 HBSA_DO_RCMF:
+	CALL	HBSA_SETPLT
+	LD	HL,HWSTR_RCMF
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JR	Z,HBSA_RCMF_Z180
+	CP	PLT_RCZ180
+	JR	Z,HBSA_RCMF_Z180
 	LD	A,PSG_RCMF_RSEL
 	LD	D,PSG_RCMF_RDAT
 	LD	E,PSG_RCMF_RIN
-	LD	HL,HWSTR_RCMF
+	JR	HBSA_APPLY
+HBSA_RCMF_Z180:
+	LD	A,PSG_RCMF_Z180_RSEL
+	LD	D,PSG_RCMF_Z180_RDAT
+	LD	E,PSG_RCMF_Z180_RIN
+	PUSH	AF			; save RSEL before clobbering A for Z180
+	LD	A,Z180_RCZ180
+	LD	(Z180),A
+	POP	AF
 HBSA_APPLY:
 	LD	(RSEL),A
 	LD	A,D
@@ -213,7 +249,7 @@ HB_SND_GET2:
 	LD	DE,TSSTR_MSX
 	LD	BC,PSG_COLECO_PORTW
 	LD	A,2
-	JR	HBS2_SET_PAIR
+	JP	HBS2_SET_PAIR
 HBS2_TRY_MSXRC:
 	; MSX + RC/EB
 	BIT	0,B
@@ -222,9 +258,9 @@ HBS2_TRY_MSXRC:
 	JR	Z,HBS2_TRY_MSXMF
 	LD	HL,PSG_MSX_PORTW
 	LD	DE,TSSTR_MSX
-	LD	BC,PSG_RCEB_PORTW
+	CALL	HB_RCEB_PORTW
 	XOR	A
-	JR	HBS2_SET_PAIR
+	JP	HBS2_SET_PAIR
 HBS2_TRY_MSXMF:
 	; MSX + RC/MF
 	BIT	0,B
@@ -236,7 +272,7 @@ HBS2_TRY_MSXMF:
 	LD	BC,PSG_RCMF_PORTW
 	; NOTE: TSSTR_RC represents generic RC ports; MF uses D1/D0 too.
 	XOR	A
-	JR	HBS2_SET_PAIR
+	JP	HBS2_SET_PAIR
 HBS2_TRY_COLECORC:
 	; COLECO + RC/EB
 	BIT	1,B
@@ -245,9 +281,9 @@ HBS2_TRY_COLECORC:
 	JR	Z,HBS2_TRY_COLECOMF
 	LD	HL,PSG_COLECO_PORTW
 	LD	DE,TSSTR_COLECO
-	LD	BC,PSG_RCEB_PORTW
+	CALL	HB_RCEB_PORTW
 	XOR	A
-	JR	HBS2_SET_PAIR
+	JP	HBS2_SET_PAIR
 HBS2_TRY_COLECOMF:
 	; COLECO + RC/MF
 	BIT	1,B
@@ -258,18 +294,35 @@ HBS2_TRY_COLECOMF:
 	LD	DE,TSSTR_COLECO
 	LD	BC,PSG_RCMF_PORTW
 	XOR	A
-	JR	HBS2_SET_PAIR
+	JP	HBS2_SET_PAIR
 HBS2_TRY_RCTWO:
 	; RC/EB + RC/MF
 	BIT	2,B
 	JR	Z,HBS2_FAIL
 	BIT	3,B
 	JR	Z,HBS2_FAIL
-	LD	HL,PSG_RCEB_PORTW
+	; Z180 EB/MF share the same data port (60H); one physical AY on SC126/RCZ180.
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JR	Z,HBS2_FAIL
+	CP	PLT_RCZ180
+	JR	Z,HBS2_FAIL
+	CALL	HB_RCEB_PORTW
 	LD	DE,TSSTR_RC
+	PUSH	BC
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JR	Z,HBS2_RCMF_Z180
+	CP	PLT_RCZ180
+	JR	Z,HBS2_RCMF_Z180
 	LD	BC,PSG_RCMF_PORTW
+	JR	HBS2_RCTWO_SET
+HBS2_RCMF_Z180:
+	LD	BC,PSG_RCMF_Z180_PORTW
+HBS2_RCTWO_SET:
+	POP	HL
 	XOR	A
-	JR	HBS2_SET_PAIR
+	JP	HBS2_SET_PAIR
 ;
 ; Commit a successful dual-PSG pair from HBIOS enumeration.
 ; IN: HL=port1, DE=desc1, BC=port2, A=desc2 selector (0=RC, 1=MSX, 2=COLECO)
@@ -277,9 +330,11 @@ HBS2_TRY_RCTWO:
 HBS2_SET_PAIR:
 	LD	(TS_PORTS1),HL
 	LD	(TS_DESC1),DE
+	PUSH	AF			; save desc2 selector (LD H,B destroys A)
 	LD	H,B
 	LD	L,C
 	LD	(TS_PORTS2),HL
+	POP	AF
 	CP	1
 	JR	Z,HBS2_SET_PAIR_MSX
 	CP	2
@@ -299,6 +354,32 @@ HBS2_FAIL:
 	OR	$FF
 	RET
 ;
+
+; Return BC = RC/EB packed ports for current platform (RDAT:RSEL).
+HB_RCEB_PORTW:
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JR	Z,HB_RCEB_PORTW_Z
+	CP	PLT_RCZ180
+	JR	Z,HB_RCEB_PORTW_Z
+	LD	BC,PSG_RCEB_PORTW
+	RET
+HB_RCEB_PORTW_Z:
+	LD	BC,PSG_RCEB_Z180_PORTW
+	RET
+
+; Return BC = RC/MF packed ports for current platform (RDAT:RSEL).
+HB_RCMF_PORTW:
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JR	Z,HB_RCMF_PORTW_Z
+	CP	PLT_RCZ180
+	JR	Z,HB_RCMF_PORTW_Z
+	LD	BC,PSG_RCMF_PORTW
+	RET
+HB_RCMF_PORTW_Z:
+	LD	BC,PSG_RCMF_Z180_PORTW
+	RET
 
 ; Auto-select PSG hardware from HBIOS or config table scan.
 AUTOSEL_IMPL:
@@ -324,25 +405,48 @@ CFGSEL_IMPL:
 	CP	E				; Equal?
 	JR	NZ,CFGSEL_IMPL		; If no match keep trying
 ;
-	; Activate card if applicable
+	; Activate card if applicable (match Tune.com probe sequence)
+	CALL	SLOWIO
 	LD	B,0			; ensure 8-bit port addressing via BC
 	LD	A,(ACR)		; Get ACR port address (if any)
 	LD	C,A			; Copy to C for I/O later
 	INC	A			; $FF -> $00 & set flags
 	JR	Z,PROBE_IMPL		; If no ACR, skip ahead
-	CALL	SLOWIO		; Slow down I/O for the activation write
 	LD	A,(ACRVAL)	; Value to activate card
 	OUT	(C),A		; Write value to ACR
-	CALL	NORMIO		; Restore I/O speed
 ;
 PROBE_IMPL:
 	; Test for hardware (sound chip detection)
-	; Use PROBE_AY_IMPL to avoid false positives from floating-bus echo behavior.
+	; Use Tune-compatible probe in the config-table fallback path.
 	LD	HL,(PORTS)		; HL = RDAT:RSEL
 	LD	A,(RIN)			; A = RIN
-	CALL	PROBE_AY_IMPL
+	CALL	PROBE_TUNE_IMPL
 	JP	Z,MAT			; Hardware matched!
 	JR	CFGSEL_IMPL		; Keep trying
+
+; Tune-compatible AY probe (HL=RDAT:RSEL, A=RIN). Returns Z on success.
+; Matches Source/Apps/Tune/tune.asm PROBE (write $AA to R2, read back via RIN).
+PROBE_TUNE_IMPL:
+	DI
+	PUSH	AF			; save RIN
+	LD	E,L			; E := RSEL
+	LD	D,H			; D := RDAT
+	LD	C,E
+	LD	A,2
+	OUT	(C),A
+	LD	C,D
+	LD	A,$AA
+	OUT	(C),A
+	POP	AF
+	PUSH	AF
+	LD	C,A			; RIN port
+	IN	A,(C)
+	CP	$AA
+	PUSH	AF
+	CALL	NORMIO
+	POP	AF
+	EI
+	RET
 
 ; Generic probe for an AY on ports (HL=RDAT:RSEL, A=RIN)
 ; Returns Z on success, NZ on failure.
@@ -427,47 +531,117 @@ PRBAYI_FAIL:
 	OR	$FF			; failure, NZ set
 	RET
 
-; Probe for the two AY cards expected for TurboSound playback.
-TS_PORTS_SETUP_IMPL:
-	;
-	; Prefer HBIOS enumeration to find two distinct PSG port sets.
-	;
-	CALL	HB_SND_GET2
-	RET	Z
-	;
-	; Fallback: use current PORTS as chip #1 and pick a different known port set
-	; without relying on readback.
-	;
-	LD	HL,(PORTS)		; HL = chip1 ports (RDAT:RSEL)
-	LD	(TS_PORTS1),HL
-	LD	DE,TSSTR_MSX
-	LD	BC,PSG_MSX_PORTW
+; Probe packed RDAT:RSEL ports (HL) with read port A=RIN. Returns Z on success.
+TS_PROBE_PORTW:
+	CALL	SLOWIO
+	JP	PROBE_TUNE_IMPL
+
+; Try HL as chip 2 if distinct from TS_PORTS1 and hardware responds.
+; A = RIN, DE = description string. Returns Z on success.
+TS_TRY_CAND:
+	LD	C,A			; preserve RIN (SBC/ADD destroy A)
+	LD	BC,(TS_PORTS1)
 	OR	A
 	SBC	HL,BC
-	JR	Z,TS_SETD1_IMPL
-	LD	DE,TSSTR_COLECO
-	ADD	HL,BC			; restore HL
-	LD	BC,PSG_COLECO_PORTW
-	OR	A
-	SBC	HL,BC
-	JR	Z,TS_SETD1_IMPL
-	LD	DE,TSSTR_RC
-TS_SETD1_IMPL:
-	LD	(TS_DESC1),DE
-	;
-	; Choose chip2 by excluding chip1
-	LD	HL,(TS_PORTS1)
-	LD	DE,PSG_COLECO_PORTW
-	OR	A
-	SBC	HL,DE
-	LD	HL,PSG_COLECO_PORTW
-	LD	DE,TSSTR_COLECO
-	JR	NZ,TS_FBK2_SET2_IMPL
-	LD	HL,PSG_MSX_PORTW
-	LD	DE,TSSTR_MSX
-TS_FBK2_SET2_IMPL:
+	JR	Z,TS_TRY_CAND_FAIL
+	ADD	HL,BC
+	LD	A,C
+	CALL	TS_PROBE_PORTW
+	JR	NZ,TS_TRY_CAND_FAIL
+	; Same data port (high byte) means one physical AY, not a second chip.
+	LD	A,H
+	LD	BC,(TS_PORTS1)
+	CP	B
+	JR	Z,TS_TRY_CAND_FAIL
 	LD	(TS_PORTS2),HL
 	LD	(TS_DESC2),DE
+	XOR	A
+	RET
+TS_TRY_CAND_FAIL:
+	OR	$FF
+	RET
+
+; Probe for a second PSG distinct from TS_PORTS1. Returns Z if found.
+TS_FIND_CHIP2:
+	; Coleco
+	LD	HL,PSG_COLECO_PORTW
+	LD	DE,TSSTR_COLECO
+	LD	A,PSG_COLECO_RIN
+	CALL	TS_TRY_CAND
+	RET	Z
+
+	; RC/MF (platform-aware ports)
+	CALL	HB_RCMF_PORTW
+	LD	H,B
+	LD	L,C
+	LD	DE,TSSTR_RC
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JR	Z,TS_FC2_MFZ
+	CP	PLT_RCZ180
+	JR	Z,TS_FC2_MFZ
+	LD	A,PSG_RCMF_RIN
+	JR	TS_FC2_MF
+TS_FC2_MFZ:
+	LD	A,PSG_RCMF_Z180_RIN
+TS_FC2_MF:
+	CALL	TS_TRY_CAND
+	RET	Z
+
+	; MSX
+	LD	HL,PSG_MSX_PORTW
+	LD	DE,TSSTR_MSX
+	LD	A,PSG_MSX_RIN
+	CALL	TS_TRY_CAND
+	RET	Z
+
+	OR	$FF
+	RET
+
+; Probe for two AY cards for TurboSound playback.
+; Sets TS_DUALHW non-zero only when two distinct port sets are found.
+; Single-chip systems keep TS_DUALHW clear (play chip-1 stream only).
+TS_PORTS_SETUP_IMPL:
+	XOR	A
+	LD	(TS_DUALHW),A
+	LD	(TS_PORTS2),A
+	LD	(TS_PORTS2+1),A
+	LD	(TS_DESC2),A
+	LD	(TS_DESC2+1),A
+	CALL	HB_SND_GET2
+	JR	NZ,TS_SETUP_FB
+	LD	HL,(TS_PORTS1)
+	LD	BC,(TS_PORTS2)
+	OR	A
+	SBC	HL,BC
+	JR	Z,TS_SETUP_FB		; same ports twice is not dual hardware
+	CALL	TS_VERIFY_DUAL_PORTS
+	JR	NZ,TS_SETUP_FB
+	JR	TS_SETUP_DUAL
+TS_SETUP_FB:
+	LD	HL,(PORTS)
+	LD	(TS_PORTS1),HL
+	LD	DE,(DESC)
+	LD	(TS_DESC1),DE
+	CALL	TS_FIND_CHIP2
+	JR	Z,TS_SETUP_DUAL
+	XOR	A
+	RET
+TS_SETUP_DUAL:
+	LD	A,$FF
+	LD	(TS_DUALHW),A
+	XOR	A
+	RET
+
+; Require two distinct data ports (packed word high byte = RDAT).
+; Returns Z if valid dual hardware, NZ otherwise.
+TS_VERIFY_DUAL_PORTS:
+	LD	HL,(TS_PORTS1)
+	LD	BC,(TS_PORTS2)
+	LD	A,H
+	CP	B
+	RET	NZ
+	OR	$FF
 	RET
 
 ; Adjust timing in delay mode to compensate for extra TS work.

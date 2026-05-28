@@ -32,15 +32,18 @@ GOPTXSP1:
 GOPTXSP2:
 	CALL	PRTSONGMETA		; Print song metadata block
 ;
-	; TurboSound-packed PT3 init
+	; TurboSound-packed PT3 init (dual hardware only)
 	LD	A,(TSFLAG)
 	OR	A
 	JR	Z,PTXINITN
+	CALL	TS_PORTS_SETUP_IMPL
+	LD	A,(TS_DUALHW)
+	OR	A
+	JR	Z,PTXINITN		; one AY: play module 1 via normal PT3
 	ISHBIOS
 	JR	Z,PTXINITT			; TurboSound requires direct I/O
 	ERRWITHMSG(MSGTSHB)
 PTXINITT:
-	CALL	TS_PORTS_SETUP_IMPL	; probe and configure both chips
 	CALL	TS_ADJTIM_IMPL	; adjust delay timing for TS
 	CALL	TS_INIT			; init both PT3 instances
 	JR	PTXSTART
@@ -57,9 +60,13 @@ PTXSTART:
 PTXSTARTF:
 	CALL	FLUSHKEYS
 PTXSTART0:
+	CALL	VT_APPLY_DLY_BIAS	; delay-mode Z80 tempo trim
 	CALL	PRTPLAYMSG		; Playing message
 ;
 PTXLP:	LD	A,(TSFLAG)
+	OR	A
+	JR	Z,PTXLP_NORM
+	LD	A,(TS_DUALHW)
 	OR	A
 	JR	Z,PTXLP_NORM
 	CALL	TS_PLAYQUARK	; Play one quark on both chips

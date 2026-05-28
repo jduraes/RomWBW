@@ -37,8 +37,7 @@ PRTPLAYINFO:
 	LD	A,(HBIOSMD)
 	OR	A
 	JR	NZ,PRTPIU_TSHB
-	CALL	TS_PORTS_SETUP_IMPL
-	CALL	PRT_TSPORTS_LINE
+	CALL	PRT_TS_HWLINE
 	CALL	PRTWMOD
 	RET
 PRTPIU_TSHB:
@@ -93,9 +92,8 @@ PRTPLAYINFO0:
 	OR	A
 	JR	NZ,PRTPI_TSHB
 	;
-	; direct I/O: select ports and print the two-chip ports line
-	CALL	TS_PORTS_SETUP_IMPL
-	CALL	PRT_TSPORTS_LINE
+	; direct I/O: probe hardware and print single- or dual-chip line
+	CALL	PRT_TS_HWLINE
 	CALL	PRTWMOD
 	LD	A,$FF
 	LD	(INFOLINE),A
@@ -137,6 +135,23 @@ PRTPI_HW:
 	LD	A,$FF
 	LD	(INFOLINE),A
 	RET
+;
+; After TS_DETECT: probe chips and print hardware line.
+; Dual AY: "Playing on X and Y Ports"
+; Single AY: "Playing on X" (chip-1 stream only at playback)
+;
+PRT_TS_HWLINE:
+	CALL	TS_PORTS_SETUP_IMPL
+	LD	A,(TS_DUALHW)
+	OR	A
+	JR	NZ,PRT_TS_HWLINE_DUAL
+	LD	DE,MSGTSPRE
+	CALL	PRTSTR
+	LD	DE,(TS_DESC1)
+	CALL	PRTSTR
+	RET
+PRT_TS_HWLINE_DUAL:
+	JP	PRT_TSPORTS_LINE
 ;
 ; Print the TurboSound ports line using TS_DESC1/TS_DESC2.
 ;

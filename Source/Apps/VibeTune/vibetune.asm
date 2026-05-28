@@ -139,7 +139,7 @@ ACBBAC			.EQU	0	; 3) Allow channels allocation bits at (START+10)
 LoopChecker		.EQU	1	; 4) Allow loop checking and disabling
 Id				.EQU	1	; 5) Insert official identificator
 ; VTBANREL: debug build token only (bNNN). Revision stays literal v0.1 in MSGBAN.
-#DEFINE VTBANREL "b145"
+#DEFINE VTBANREL "b152"
 
 	.ORG	$0100
 ;
@@ -1197,6 +1197,9 @@ EXIT0:
 	OR	A
 	JR	NZ,EXITX		; VGM: already muted by VGM_MUTE_ALL
 	LD	A,(TSFLAG)
+	OR	A
+	JR	Z,EXITN
+	LD	A,(TS_DUALHW)
 	OR	A
 	JR	Z,EXITN
 	CALL	TS_MUTE			; Mute both chips
@@ -2782,6 +2785,7 @@ LOADBYTES	.DW	0	; bytes loaded (padded to 128-byte CP/M records)
 ;
 ; TurboSound PT3 (packed dual-module) state
 TSFLAG		.DB	0	; non-zero if a TS footer was detected
+TS_DUALHW	.DB	0	; non-zero if two distinct AY chips are present
 TSSET1		.DB	0	; SETUP byte snapshot (instance 1)
 TSSET2		.DB	0	; SETUP byte snapshot (instance 2)
 TS_OFF2		.DW	0	; module #2 offset from start of file
@@ -2899,7 +2903,7 @@ YM2151SEL2	.EQU	YM2151_SECONDARY_SEL	; YM2151 register select (secondary, undefi
 YM2151DAT2	.EQU	YM2151_SECONDARY_DAT	; YM2151 data write (secondary, undefined on RCBUS)
 
 MSGBAN:
-	.DB	"VibeTune Player for RomWBW v0.1", VTBANREL, ", 14-May-2026",0
+	.DB	"VibeTune Player for RomWBW v0.1", VTBANREL, ", 30-May-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
