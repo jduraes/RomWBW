@@ -37,6 +37,8 @@ Source/Apps/SysGen.com
 Source/Apps/Talk.com
 Source/Apps/Timer.com
 Source/Apps/Tune/Tune.com
+!Source/Apps/VibeTune/vtune.com
+!Binary/Apps/vtune.com
 Source/BPBIOS/bpsys.bak
 Source/BPBIOS/bpsys.dat
 Source/BPBIOS/def-ww.lib
