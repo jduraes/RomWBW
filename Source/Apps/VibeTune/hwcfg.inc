@@ -329,6 +329,7 @@ HBS2_RCTWO_SET:
 ;
 HBS2_SET_PAIR:
 	LD	(TS_PORTS1),HL
+	LD	(TS_CHIP1_PORTS),HL
 	LD	(TS_DESC1),DE
 	PUSH	AF			; save desc2 selector (LD H,B destroys A)
 	LD	H,B
@@ -531,77 +532,25 @@ PRBAYI_FAIL:
 	OR	$FF			; failure, NZ set
 	RET
 
-; Probe packed RDAT:RSEL ports (HL) with read port A=RIN. Returns Z on success.
-TS_PROBE_PORTW:
-	CALL	SLOWIO
-	JP	PROBE_TUNE_IMPL
-
-; Try HL as chip 2 if distinct from TS_PORTS1 and hardware responds.
-; A = RIN, DE = description string. Returns Z on success.
-TS_TRY_CAND:
-	LD	C,A			; preserve RIN (SBC/ADD destroy A)
-	LD	BC,(TS_PORTS1)
-	OR	A
-	SBC	HL,BC
-	JR	Z,TS_TRY_CAND_FAIL
-	ADD	HL,BC
-	LD	A,C
-	CALL	TS_PROBE_PORTW
-	JR	NZ,TS_TRY_CAND_FAIL
-	; Same data port (high byte) means one physical AY, not a second chip.
-	LD	A,H
-	LD	BC,(TS_PORTS1)
-	CP	B
-	JR	Z,TS_TRY_CAND_FAIL
-	LD	(TS_PORTS2),HL
-	LD	(TS_DESC2),DE
-	XOR	A
-	RET
-TS_TRY_CAND_FAIL:
-	OR	$FF
-	RET
-
-; Probe for a second PSG distinct from TS_PORTS1. Returns Z if found.
-TS_FIND_CHIP2:
-	; Coleco
-	LD	HL,PSG_COLECO_PORTW
-	LD	DE,TSSTR_COLECO
-	LD	A,PSG_COLECO_RIN
-	CALL	TS_TRY_CAND
-	RET	Z
-
-	; RC/MF (platform-aware ports)
-	CALL	HB_RCMF_PORTW
-	LD	H,B
-	LD	L,C
-	LD	DE,TSSTR_RC
+; SC126/RCZ180: never assign a mask-gated second chip (one physical AY).
+TS_IF_Z180_TS_SINGLE:
 	LD	A,(CURPLT)
 	CP	PLT_SCZ180
-	JR	Z,TS_FC2_MFZ
+	JP	Z,TS_SETUP_SINGLE
 	CP	PLT_RCZ180
-	JR	Z,TS_FC2_MFZ
-	LD	A,PSG_RCMF_RIN
-	JR	TS_FC2_MF
-TS_FC2_MFZ:
-	LD	A,PSG_RCMF_Z180_RIN
-TS_FC2_MF:
-	CALL	TS_TRY_CAND
-	RET	Z
-
-	; MSX
-	LD	HL,PSG_MSX_PORTW
-	LD	DE,TSSTR_MSX
-	LD	A,PSG_MSX_RIN
-	CALL	TS_TRY_CAND
-	RET	Z
-
-	OR	$FF
+	JP	Z,TS_SETUP_SINGLE
 	RET
 
 ; Probe for two AY cards for TurboSound playback.
 ; Sets TS_DUALHW non-zero only when two distinct port sets are found.
 ; Single-chip systems keep TS_DUALHW clear (play chip-1 stream only).
 TS_PORTS_SETUP_IMPL:
+	; Per-track config is established once (PRTPLAYINFO / GOPTX). Later callers
+	; (GOPTX again, KEY_REDRAW via PRTPLAYINFO) must not clear TS_DUALHW.
+	LD	HL,(TS_CHIP1_PORTS)
+	LD	A,H
+	OR	L
+	RET	NZ
 	XOR	A
 	LD	(TS_DUALHW),A
 	LD	(TS_PORTS2),A
@@ -617,14 +566,51 @@ TS_PORTS_SETUP_IMPL:
 	JR	Z,TS_SETUP_FB		; same ports twice is not dual hardware
 	CALL	TS_VERIFY_DUAL_PORTS
 	JR	NZ,TS_SETUP_FB
-	JR	TS_SETUP_DUAL
+	JP	TS_SETUP_DUAL
 TS_SETUP_FB:
+	; PORTS tracks the active chip and becomes chip 2 after TS_PLAYQUARK;
+	; never re-derive chip 1 from (PORTS) once TS_CHIP1_PORTS is set.
+	LD	HL,(TS_CHIP1_PORTS)
+	LD	A,H
+	OR	L
+	JR	NZ,TS_SETUP_FB_CHIP1
 	LD	HL,(PORTS)
+	LD	(TS_CHIP1_PORTS),HL
+TS_SETUP_FB_CHIP1:
+	LD	HL,(TS_CHIP1_PORTS)
 	LD	(TS_PORTS1),HL
 	LD	DE,(DESC)
 	LD	(TS_DESC1),DE
-	CALL	TS_FIND_CHIP2
-	JR	Z,TS_SETUP_DUAL
+	;
+	; Tune / b147 fallback: chip 2 is the other standard MSX or Coleco port set.
+	; No readback probes and no SNDMASK gating (RC2014 MSX+Coleco).
+	;
+	CALL	TS_IF_Z180_TS_SINGLE
+	LD	HL,(TS_PORTS1)
+	LD	DE,PSG_COLECO_PORTW
+	OR	A
+	SBC	HL,DE
+	JR	Z,TS_FBK2_MSX
+	LD	HL,PSG_COLECO_PORTW
+	LD	(TS_PORTS2),HL
+	LD	DE,TSSTR_COLECO
+	LD	(TS_DESC2),DE
+	JR	TS_FBK_DONE
+TS_FBK2_MSX:
+	LD	HL,PSG_MSX_PORTW
+	LD	(TS_PORTS2),HL
+	LD	DE,TSSTR_MSX
+	LD	(TS_DESC2),DE
+TS_FBK_DONE:
+	LD	HL,(TS_PORTS1)
+	LD	BC,(TS_PORTS2)
+	OR	A
+	SBC	HL,BC
+	JR	Z,TS_SETUP_SINGLE
+	CALL	TS_VERIFY_DUAL_PORTS
+	JR	NZ,TS_SETUP_SINGLE
+	JP	TS_SETUP_DUAL
+TS_SETUP_SINGLE:
 	XOR	A
 	RET
 TS_SETUP_DUAL:
@@ -634,14 +620,17 @@ TS_SETUP_DUAL:
 	RET
 
 ; Require two distinct data ports (packed word high byte = RDAT).
-; Returns Z if valid dual hardware, NZ otherwise.
+; Returns Z if valid dual hardware, NZ if same data port (not dual).
 TS_VERIFY_DUAL_PORTS:
 	LD	HL,(TS_PORTS1)
 	LD	BC,(TS_PORTS2)
 	LD	A,H
 	CP	B
-	RET	NZ
+	JR	NZ,TS_VERIFY_DUAL_OK
 	OR	$FF
+	RET
+TS_VERIFY_DUAL_OK:
+	XOR	A
 	RET
 
 ; Adjust timing in delay mode to compensate for extra TS work.

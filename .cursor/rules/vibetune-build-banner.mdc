@@ -26,7 +26,9 @@ Apply **only** for explicit **VibeTune-only** tasks (not RomWBW release builds).
 Before **`Source/Apps/VibeTune/Build.cmd`**:
 
 1. Bump **`#DEFINE VTBANREL "bNNN"`** only (e.g. **`v0.1b145`** in the banner).
-2. Set **`MSGBAN`** date from the host machine (`Get-Date -Format 'dd-MMM-yyyy'`).
+2. Set **`MSGBAN`** date to the actual build date in `dd-MMM-yyyy`.
+3. Keep this decision in the agent flow: update `vibetune.asm` directly before build.
+4. Do **not** use OS-specific scripting in `Build.cmd` (PowerShell/bash/python/perl) for banner stamping; builds must stay portable across Windows/macOS/Linux.
 
 ---
 

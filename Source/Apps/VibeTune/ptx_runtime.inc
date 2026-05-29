@@ -44,7 +44,7 @@ GOPTXSP2:
 	JR	Z,PTXINITT			; TurboSound requires direct I/O
 	ERRWITHMSG(MSGTSHB)
 PTXINITT:
-	CALL	TS_ADJTIM_IMPL	; adjust delay timing for TS
+	CALL	TS_ADJTIM_IMPL	; adjust delay timing for TS (Tune/b147)
 	CALL	TS_INIT			; init both PT3 instances
 	JR	PTXSTART
 PTXINITN:
@@ -60,7 +60,17 @@ PTXSTART:
 PTXSTARTF:
 	CALL	FLUSHKEYS
 PTXSTART0:
-	CALL	VT_APPLY_DLY_BIAS	; delay-mode Z80 tempo trim
+	; b147/Tune: no VT_APPLY_DLY_BIAS on dual TurboSound (added later for RC2014 PT3)
+	LD	A,(TSFLAG)
+	OR	A
+	JR	Z,PTXSTART0_BIAS
+	LD	A,(TS_DUALHW)
+	OR	A
+	JR	Z,PTXSTART0_BIAS
+	JR	PTXSTART0_MSG
+PTXSTART0_BIAS:
+	CALL	VT_APPLY_DLY_BIAS
+PTXSTART0_MSG:
 	CALL	PRTPLAYMSG		; Playing message
 ;
 PTXLP:	LD	A,(TSFLAG)
@@ -112,6 +122,7 @@ PTXLP_PAUSE_OFF:
 	JP	NZ,EXIT
 	JP	PTXLP_KEY1
 PTXLP_KEY1:
-	CALL	WAITQ		; Wait one quark period
-	JP	PTXLP			; Loop for next quark
+	; b147/Tune: always WAITQ after play/key (delay or timer via WMOD)
+	CALL	WAITQ
+	JP	PTXLP
 ;

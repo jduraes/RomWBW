@@ -26,7 +26,9 @@ Apply **only** when the user is clearly doing **standalone VibeTune** work (feat
 Before **`Build.cmd`** in this folder:
 
 1. **Bump** **`#DEFINE VTBANREL "bNNN"`** only (debug counter; revision stays literal **`v0.1`** in **`MSGBAN`** → e.g. **`v0.1b145`**). Also used in the PT3 ident string.
-2. **Date:** put the machine’s today in **`MSGBAN`** (e.g. `Get-Date -Format 'dd-MMM-yyyy'`). Never use Cursor session “today” metadata.
+2. **Date:** set `MSGBAN` to the real build date in `dd-MMM-yyyy`. Never use Cursor session “today” metadata.
+3. Keep this in agent workflow: edit `vibetune.asm` before build.
+4. Do **not** add OS-specific date stamping to `Build.cmd` (PowerShell/bash/python/perl); build scripts must remain cross-platform.
 
 Do **not** add version scripts or generated `.inc` files unless the user asks.
 

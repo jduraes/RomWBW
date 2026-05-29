@@ -25,7 +25,16 @@ PRTPLAYINFO:
 	JR	Z,PRTPIU_VGM
 	CP	TYPPT3
 	JR	NZ,PRTPIU_NPT3
+	LD	HL,(TS_CHIP1_PORTS)
+	LD	A,H
+	OR	L
+	JR	NZ,PRTPIU_TS_PRINT
 	CALL	TS_DETECT
+	LD	A,(TSFLAG)
+	OR	A
+	JR	Z,PRTPIU_NPT3
+	CALL	TS_PORTS_SETUP_IMPL
+PRTPIU_TS_PRINT:
 	LD	A,(TSFLAG)
 	OR	A
 	JR	Z,PRTPIU_NPT3
@@ -77,7 +86,16 @@ PRTPLAYINFO0:
 	JR	Z,PRTPI_VGM
 	CP	TYPPT3
 	JR	NZ,PRTPI_NPT3
+	LD	HL,(TS_CHIP1_PORTS)
+	LD	A,H
+	OR	L
+	JR	NZ,PRTPI_TS_PRINT
 	CALL	TS_DETECT		; sets TSFLAG/TS_OFF2/TS_LEN2 if detected
+	LD	A,(TSFLAG)
+	OR	A
+	JR	Z,PRTPI_NPT3
+	CALL	TS_PORTS_SETUP_IMPL
+PRTPI_TS_PRINT:
 	LD	A,(TSFLAG)
 	OR	A
 	JR	Z,PRTPI_NPT3
@@ -92,7 +110,7 @@ PRTPLAYINFO0:
 	OR	A
 	JR	NZ,PRTPI_TSHB
 	;
-	; direct I/O: probe hardware and print single- or dual-chip line
+	; direct I/O: print cached single- or dual-chip line (no re-probe)
 	CALL	PRT_TS_HWLINE
 	CALL	PRTWMOD
 	LD	A,$FF
@@ -136,12 +154,11 @@ PRTPI_HW:
 	LD	(INFOLINE),A
 	RET
 ;
-; After TS_DETECT: probe chips and print hardware line.
-; Dual AY: "Playing on X and Y Ports"
-; Single AY: "Playing on X" (chip-1 stream only at playback)
+; Print TurboSound hardware line from TS_* state set by TS_PORTS_SETUP_IMPL.
+; Callers must probe once before calling (PRTPLAYINFO, GOPTX); redraw must not
+; re-probe because (PORTS) may point at chip 2 mid-playback.
 ;
 PRT_TS_HWLINE:
-	CALL	TS_PORTS_SETUP_IMPL
 	LD	A,(TS_DUALHW)
 	OR	A
 	JR	NZ,PRT_TS_HWLINE_DUAL

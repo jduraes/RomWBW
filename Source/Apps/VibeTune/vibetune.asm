@@ -139,7 +139,7 @@ ACBBAC			.EQU	0	; 3) Allow channels allocation bits at (START+10)
 LoopChecker		.EQU	1	; 4) Allow loop checking and disabling
 Id				.EQU	1	; 5) Insert official identificator
 ; VTBANREL: debug build token only (bNNN). Revision stays literal v0.1 in MSGBAN.
-#DEFINE VTBANREL "b152"
+#DEFINE VTBANREL "b162"
 
 	.ORG	$0100
 ;
@@ -634,6 +634,9 @@ _LDX	LD	C,16			; CPM Close File function
 	LD	A,$FF
 	LD	(PLSHOWN),A
 _LDX0:
+	XOR	A
+	LD	(TS_CHIP1_PORTS),A
+	LD	(TS_CHIP1_PORTS+1),A
 	CALL	UI_CLEAR_TRACK_BLOCK
 	; Post-load: print hardware / TurboSound info
 	CALL	PRTPLAYINFO
@@ -2792,6 +2795,7 @@ TS_OFF2		.DW	0	; module #2 offset from start of file
 TS_LEN2		.DW	0	; module #2 length
 TS_PORTS1	.DW	0	; chip 1 ports (RDAT:RSEL)
 TS_PORTS2	.DW	0	; chip 2 ports (RDAT:RSEL)
+TS_CHIP1_PORTS	.DW	0	; chip 1 ports frozen at first setup (PORTS changes during TS play)
 TS_DESC1	.DW	0	; chip 1 port description string
 TS_DESC2	.DW	0	; chip 2 port description string
 INFOLINE	.DB	0	; non-zero if a hardware/mode line was printed
@@ -2903,7 +2907,7 @@ YM2151SEL2	.EQU	YM2151_SECONDARY_SEL	; YM2151 register select (secondary, undefi
 YM2151DAT2	.EQU	YM2151_SECONDARY_DAT	; YM2151 data write (secondary, undefined on RCBUS)
 
 MSGBAN:
-	.DB	"VibeTune Player for RomWBW v0.1", VTBANREL, ", 30-May-2026",0
+	.DB	"VibeTune Player for RomWBW v0.1", VTBANREL, ", 28-May-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
@@ -3327,31 +3331,7 @@ INITCOMMON
 
 ;note table data depacker
 ;(c) Ivan Roshin
-	LD DE,T_PACK
-	LD BC,T1_+(2*49)-1
-TP_0	LD A,(DE)
-	INC DE
-	CP 15*2
-	JR NC,TP_1
-	LD H,A
-	LD A,(DE)
-	LD L,A
-	INC DE
-	JR TP_2
-TP_1	PUSH DE
-	LD D,0
-	LD E,A
-	ADD HL,DE
-	ADD HL,DE
-	POP DE
-TP_2	LD A,H
-	LD (BC),A
-	DEC BC
-	LD A,L
-	LD (BC),A
-	DEC BC
-	SUB ($F8*2) & $FF
-	JR NZ,TP_0
+	CALL	TS_DEPACK_TP
 
 #IF LoopChecker
 	LD HL,SETUP
@@ -3388,11 +3368,86 @@ TP_2	LD A,H
 	LD (ChanC+OrnPtr),HL
 
 	POP AF
+	CALL	TS_NTVT_START
+	JP	ROUT
+
+; Depack shared tone table (T_PACK -> T1_).
+TS_DEPACK_TP:
+	LD	DE,T_PACK
+	LD	BC,T1_+(2*49)-1
+TP_0	LD	A,(DE)
+	INC	DE
+	CP	15*2
+	JR	NC,TP_1
+	LD	H,A
+	LD	A,(DE)
+	LD	L,A
+	INC	DE
+	JR	TP_2
+TP_1	PUSH	DE
+	LD	D,0
+	LD	E,A
+	ADD	HL,DE
+	ADD	HL,DE
+	POP	DE
+TP_2	LD	A,H
+	LD	(BC),A
+	DEC	BC
+	LD	A,L
+	LD	(BC),A
+	DEC	BC
+	SUB	($F8*2) & $FF
+	JR	NZ,TP_0
+	RET
+
+; TurboSound: rebuild VT_/NT_ for the module at MODADDR after CTX_LOAD.
+; No-op unless TS_DUALHW (SC126 single-AY uses normal PT3, not this path).
+TS_REBUILD_NTVT:
+	LD	A,(TS_DUALHW)
+	OR	A
+	RET	Z
+	LD	HL,(MODADDR)
+	LD	BC,PT3PD
+	XOR	A
+	LD	H,A
+	LD	L,A
+	LD	DE,PT3EMPTYORN
+	LD	(PTDECOD+1),BC
+	LD	(PsCalc),HL
+	PUSH	DE
+	CALL	TS_DEPACK_TP
+	CALL	TS_NTVT_PREP
+	CALL	TS_NTVT_START
+	RET
+
+TS_NTVT_PREP:
+	LD	HL,(MODADDR)
+	LD	DE,13
+	ADD	HL,DE
+	LD	A,(HL)
+	SUB	$30
+	JR	C,TS_NTP_V6
+	CP	10
+	JR	C,TS_NTP_VOK
+TS_NTP_V6:
+	LD	A,6
+TS_NTP_VOK:
+	PUSH	AF
+	CP	4
+	LD	HL,(MODADDR)
+	LD	DE,99
+	ADD	HL,DE
+	LD	A,(HL)
+	RLA
+	AND	7
+	PUSH	AF
+	RET
 
 ;NoteTableCreator (c) Ivan Roshin
 ;A - NoteTableNumber*2+VersionForNoteTable
 ;(xx1b - 3.xx..3.4r, xx0b - 3.4x..3.6x..VTII1.0)
 
+TS_NTVT_START:
 	LD HL,NT_DATA
 	PUSH DE
 	LD D,B
@@ -3529,7 +3584,8 @@ M2      .DB $7D
 M3      DEC C
 	JR NZ,INITV2
 
-	JP ROUT
+TS_NTVT_END:
+	RET
 
 SETMDAD	LD (MODADDR),HL
 	LD (MDADDR1),HL
@@ -5048,6 +5104,7 @@ data:
 ;
 ;===============================================================================
 	.END
+
 
 
 

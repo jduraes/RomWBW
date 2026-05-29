@@ -5,6 +5,9 @@
 ; Initialize both packed PT3 modules as independent instances.
 ;
 TS_INIT:
+	LD	A,(TS_DUALHW)
+	OR	A
+	RET	Z
 	; save a pristine template of the player state
 	LD	HL,TS_CTXTMPL_VARS
 	LD	(CTX_VPTR),HL
@@ -31,9 +34,12 @@ TS_INIT:
 	LD	(TSSET2),A
 	RET
 ;
-; Play one quark on both instances.
+; Play one quark on both instances (dual hardware only).
 ;
 TS_PLAYQUARK:
+	LD	A,(TS_DUALHW)
+	OR	A
+	RET	Z
 	CALL	TS_LOAD_CTX1
 	CALL	TS_SETPORTS1_IMPL
 	CALL	PLAY
@@ -48,9 +54,12 @@ TS_PLAYQUARK:
 	CALL	TS_SAVE_CTX2
 	RET
 ;
-; Mute both chips.
+; Mute both chips (dual hardware only).
 ;
 TS_MUTE:
+	LD	A,(TS_DUALHW)
+	OR	A
+	RET	Z
 	CALL	TS_LOAD_CTX1
 	CALL	TS_SETPORTS1_IMPL
 	CALL	MUTE
