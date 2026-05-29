@@ -36,7 +36,7 @@ Key Features
 - Terminal profile configuration:
   - -config interactive mode
   - Persists terminal settings in TERM.CFG for reuse across applications
-  - Stores term type, ANSI preference, and visible rows/columns
+  - Stores term type, ANSI colour preference, and visible rows/columns
 
 Build Outputs
 -------------
