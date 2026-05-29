@@ -532,15 +532,6 @@ PRBAYI_FAIL:
 	OR	$FF			; failure, NZ set
 	RET
 
-; SC126/RCZ180: never assign a mask-gated second chip (one physical AY).
-TS_IF_Z180_TS_SINGLE:
-	LD	A,(CURPLT)
-	CP	PLT_SCZ180
-	JP	Z,TS_SETUP_SINGLE
-	CP	PLT_RCZ180
-	JP	Z,TS_SETUP_SINGLE
-	RET
-
 ; Probe for two AY cards for TurboSound playback.
 ; Sets TS_DUALHW non-zero only when two distinct port sets are found.
 ; Single-chip systems keep TS_DUALHW clear (play chip-1 stream only).
@@ -585,7 +576,15 @@ TS_SETUP_FB_CHIP1:
 	; Tune / b147 fallback: chip 2 is the other standard MSX or Coleco port set.
 	; No readback probes and no SNDMASK gating (RC2014 MSX+Coleco).
 	;
-	CALL	TS_IF_Z180_TS_SINGLE
+	; SC126/RCZ180 have one physical AY (EB/MF share data port 60H); never
+	; assign a second (Coleco) chip here. This MUST branch in-line: a CALLed
+	; guard that JPs to TS_SETUP_SINGLE would RET back here and fall through
+	; to TS_SETUP_DUAL, falsely reporting EB + Coleco on the SC126.
+	LD	A,(CURPLT)
+	CP	PLT_SCZ180
+	JP	Z,TS_SETUP_SINGLE
+	CP	PLT_RCZ180
+	JP	Z,TS_SETUP_SINGLE
 	LD	HL,(TS_PORTS1)
 	LD	DE,PSG_COLECO_PORTW
 	OR	A

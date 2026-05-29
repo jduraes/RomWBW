@@ -139,7 +139,7 @@ ACBBAC			.EQU	0	; 3) Allow channels allocation bits at (START+10)
 LoopChecker		.EQU	1	; 4) Allow loop checking and disabling
 Id				.EQU	1	; 5) Insert official identificator
 ; VTBANREL: debug build token only (bNNN). Revision stays literal v0.1 in MSGBAN.
-#DEFINE VTBANREL "b162"
+#DEFINE VTBANREL "b163"
 
 	.ORG	$0100
 ;
@@ -2907,7 +2907,7 @@ YM2151SEL2	.EQU	YM2151_SECONDARY_SEL	; YM2151 register select (secondary, undefi
 YM2151DAT2	.EQU	YM2151_SECONDARY_DAT	; YM2151 data write (secondary, undefined on RCBUS)
 
 MSGBAN:
-	.DB	"VibeTune Player for RomWBW v0.1", VTBANREL, ", 28-May-2026",0
+	.DB	"VibeTune Player for RomWBW v0.1", VTBANREL, ", 29-May-2026",0
 MSGCPUMHZ	.DB	"CPU Speed: ",0
 MSGMHZ		.DB	" MHz",0
 MSGVGMCOM	.DB	", ",0
