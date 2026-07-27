@@ -59,6 +59,7 @@ jobs:
       - name: Build
         run: |
           export TZ='America/Los_Angeles'
+          brew untap aws/tap
           brew update
           brew install srecord
           make dist

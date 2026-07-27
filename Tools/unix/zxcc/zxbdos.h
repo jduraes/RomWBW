@@ -45,5 +45,7 @@ gsx_byte gsxrd(gsx_word addr);
 void gsxwr(gsx_word addr, gsx_byte value);
 #endif
 
-void cpmbdos();
-void cpmbios();
+void cpmbdos(byte* a, byte* b, byte* c, byte* d, byte* e, byte* f,
+			 byte* h, byte* l, word* pc, word* ix, word* iy);
+void cpmbios(byte* a, byte* b, byte* c, byte* d, byte* e, byte* f,
+	byte* h, byte* l, word* pc, word* ix, word* iy);

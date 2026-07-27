@@ -499,8 +499,8 @@ flush2:
 flush3:
 	inc	c			; next char unit
 	ld	a,(ciocnt)		; get char unit count
-	cp	c			; unit > cnt?
-	jr	c,flush_z		; done
+	cp	c			; unit == cnt?
+	jr	z,flush_z		; done
 	jr	flush1			; otherwise, do next char unit
 ;
 flush_z:

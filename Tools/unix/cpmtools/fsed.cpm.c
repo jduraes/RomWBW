@@ -66,7 +66,7 @@ static void info(struct cpmSuperBlock *sb, const char *format, const char *image
 
   clear();
   msg="File system characteristics";
-  move(0,(COLS-strlen(msg))/2); printw(msg);
+  move(0,(COLS-strlen(msg))/2); printw("%s", msg);
   move(2,0); printw("                      Image: %s",image);
   move(3,0); printw("                     Format: %s",format);
   move(4,0); printw("                File system: ");
@@ -89,7 +89,7 @@ static void info(struct cpmSuperBlock *sb, const char *format, const char *image
   move(15,0);printw("    Allocatable data blocks: %d",sb->size-(sb->maxdir*32+sb->blksiz-1)/sb->blksiz);
 
   msg="Any key to continue";
-  move(23,(COLS-strlen(msg))/2); printw(msg);
+  move(23,(COLS-strlen(msg))/2); printw("%s", msg);
   getch();
 }
 /*}}}*/
@@ -102,7 +102,7 @@ static void map(struct cpmSuperBlock *sb) /*{{{*/
 
   clear();
   msg="Data map";
-  move(0,(COLS-strlen(msg))/2); printw(msg);
+  move(0,(COLS-strlen(msg))/2); printw("%s", msg);
 
   secmap=(sb->tracks*sb->sectrk+80*18-1)/(80*18);
   memset(bmap,' ',sizeof(bmap));
@@ -147,7 +147,7 @@ static void map(struct cpmSuperBlock *sb) /*{{{*/
   }
   move(21,0); printw("S=System area   D=Directory area   #=File data   .=Free");
   msg="Any key to continue";
-  move(23,(COLS-strlen(msg))/2); printw(msg);
+  move(23,(COLS-strlen(msg))/2); printw("%s", msg);
   getch();
 }
 /*}}}*/
@@ -278,7 +278,7 @@ int main(int argc, char *argv[]) /*{{{*/
     {
       const char *msg;
 
-      msg="System area"; move(0,(COLS-strlen(msg))/2); printw(msg);
+      msg="System area"; move(0,(COLS-strlen(msg))/2); printw("%s", msg);
       move(LINES-3,36); printw("F)orward 16 byte   B)ackward 16 byte");
       if (!reload) data(&drive,buf,pos);
       switch (ch=getch())
@@ -314,7 +314,7 @@ int main(int argc, char *argv[]) /*{{{*/
       int entry=(pos-(drive.boottrk*drive.sectrk*drive.secLength))>>5;
       int offset=pos&0x1f;
 
-      msg="Directory area"; move(0,(COLS-strlen(msg))/2); printw(msg);
+      msg="Directory area"; move(0,(COLS-strlen(msg))/2); printw("%s", msg);
       move(LINES-3,36); printw("F)orward entry     B)ackward entry");
 
       move(13,0); printw("Entry %3d: ",entry);      
@@ -661,7 +661,7 @@ int main(int argc, char *argv[]) /*{{{*/
     {
       const char *msg;
 
-      msg="Data area"; move(0,(COLS-strlen(msg))/2); printw(msg);
+      msg="Data area"; move(0,(COLS-strlen(msg))/2); printw("%s", msg);
       if (!reload) data(&drive,buf,pos);
       ch=getch();
     }

@@ -67,6 +67,7 @@ Tools/Linux
 Tools/Darwin
 
 Tools/unix/bin2asm/bin2asm
+Tools/unix/compress/compress
 Tools/unix/cpmtools/cpmchattr
 Tools/unix/cpmtools/cpmchmod
 Tools/unix/cpmtools/cpmcp

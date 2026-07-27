@@ -5,7 +5,7 @@
  * ===========================================================================
  */
 
-#include "config.h"
+#include <config.h>
 #include "err.h"
 #include "incl.h"
 
@@ -164,22 +164,19 @@ void *emalloc(size_t n)
 	void *p;
 
 	if ((p = malloc(n)) == NULL) {
-		eprint(_("malloc fail\n"));
+		eprint(_("not enough memory\n"));
 		exit(EXIT_FAILURE);
 	}
-	//	printf("emalloc: %d = %x\n", n, p);
 	return p;
 }
 
 /* Call realloc, but if no memory, print that error and exit with failure. */
 void *erealloc(void *p, size_t n)
 {
-	// void *q = p;
 	if ((p = realloc(p, n)) == NULL) {
-		eprint(_("realloc fail\n"));
+		eprint(_("not enough memory\n"));
 		exit(EXIT_FAILURE);
 	}
-	// printf("erealloc: %x %d = %x\n", q, n, p);
 	return p;
 }
 

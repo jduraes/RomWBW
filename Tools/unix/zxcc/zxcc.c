@@ -227,8 +227,8 @@ void load_comfile(void)
 	DBGMSGV("Loaded %d bytes from %s\n", com_len, fname);
 }
 
-unsigned int in() { return 0; }
-unsigned int out() { return 0; }
+unsigned int in(int tstates, int b, int c) { return 0; }
+unsigned int out(int tstates, int b, int c, int x) { return 0; }
 
 /*
  * xltname: Convert a unix filepath into a CP/M compatible drive:name form.

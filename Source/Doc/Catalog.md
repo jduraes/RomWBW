@@ -1372,32 +1372,6 @@ and best to copy and rename it as vezza.com
 The above is a subset of available builds. The full repository including 
 documentation is available at <https://gitlab.com/sijnstra1/vezza/>
 
-## MSX ROMS
-
-| Hard Disk Image: **hd_msxroms1.img**
-| Hard Disk Image: **hd_msxroms2.img**
-
-The collection of MSX ROMs (2 disks) as provided by Les Bird.  
-These ROMs are "run" by using the
-appropriate variant of Les' MSX8 ROM loader.  You can download the
-loader binaries from <https://github.com/lesbird/MSX8>.  You will need
-appropriate hardware to run the loader.
-
-Please review the file ROMLIST.TXT for information on the current
-operational status of the ROM and it's long file name/description.
-
-This disk (RomWBW slice) is not automatically included with the
-RomWBW "combo" disk images.  You can simply add it to a combo
-image by appending it to the end.  After booting your system,
-you can use the ASSIGN command to map the slice to a drive letter.
-Refer to the RomWBW User Guide for more information on this
-process.
-
-The ROM files are found in
-
-*  /Source/Images/d_msxroms1
-*  /Source/Images/d_msxroms2
-
 ## Turbo Pascal Compiler
 
 | Floppy Disk Image: **fd_tpascal.img**

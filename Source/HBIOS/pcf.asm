@@ -122,6 +122,9 @@ PCF_INIT:
 ;	GET_PCF		= IN A,(PCF_RS1)
 ;
 ;-----------------------------------------------------------------------------
+;
+PCF_START_ADDR:
+	OUT	(PCF_RS0),A
 PCF_START:
 	LD	A,PCF_START_
 	OUT	(PCF_RS1),A
@@ -137,6 +140,33 @@ PCF_REPSTART:
 PCF_STOP:
 	LD   	A,PCF_STOP_
 	OUT  	(PCF_RS1),A
+	RET
+;
+;-----------------------------------------------------------------------------
+; PUT ONE BYTE ON THE I2C BUS
+; A = BYTE. DOES NOT WAIT/CHECK ACK OR PIN
+;
+PCF_PUTBYTE:
+	OUT	(PCF_RS0),A
+	RET
+;
+;-----------------------------------------------------------------------------
+; GET ONE BYTE OFF THE I2C BUS
+; CALLER MUST HAVE ALREADY WAITED FOR PIN
+; RETURNS BYTE IN A
+;
+PCF_GETBYTE:
+	IN	A,(PCF_RS0)
+	RET
+;
+;-----------------------------------------------------------------------------
+; PREP NEGATIVE ACKNOWLEDGE FOR THE NEXT BYTE READ
+; MASTER RECEIVER MODE, LAST BYTE OF A READ
+; SEE PCF8584 DATASHEET FIG.7
+;
+PCF_PREPNACK:
+	LD	A,PCF_ES0
+	OUT	(PCF_RS1),A
 	RET
 ;
 ;-----------------------------------------------------------------------------
@@ -220,6 +250,13 @@ PCF_LABLP:
 	RET
 ;
 ;-----------------------------------------------------------------------------
+; PUT ONE BYTE ON THE I2C BUS
+; A = BYTE. DOES WAIT/CHECK PIN
+;
+PCF_PUTBYTE_PIN:
+	OUT	(PCF_RS0),A
+;
+;-----------------------------------------------------------------------------
 ;
 ; RETURN A=00/Z  IF SUCCESSFULL
 ; RETURN A=FF/NZ IF TIMEOUT
@@ -260,6 +297,14 @@ PCF_WFP2:
 ;
 PCF_STATUS	.DB	00H
 
+;
+;-----------------------------------------------------------------------------
+; PUT ONE BYTE ON THE I2C BUS
+; A = BYTE. DOES WAIT/CHECK ACK
+;
+PCF_PUTBYTE_ACK:
+	OUT	(PCF_RS0),A
+
 ;--------------------------------------------------------------------------------
 ;
 ; RETURN NZ/FF IF TIMEOUT ERROR
@@ -268,6 +313,7 @@ PCF_STATUS	.DB	00H
 ;
 PCF_WAIT_FOR_ACK:
 	PUSH	HL
+	PUSH	BC
 	LD	HL,PCF_ACKTO
 ;
 PCF_WFA0:
@@ -286,14 +332,19 @@ PCF_WFA0:
 ;
 	LD	A,B		; WE GOT PIN SO NOW
 	AND	PCF_LRB		; CHECK WE HAVE
-	LD	A,1
-	JR	Z,PCF_WFA2	; RECEIVED ACKNOWLEDGE
-	XOR	A
+	JR	Z,PCF_WFA_ACK	; BIT CLEAR = ACK RECEIVED
+	LD	A,1		; NO ACK -- FAILURE REASON = 01
+	OR	A		; FORCE NZ
+	JR	PCF_WFA2
+PCF_WFA_ACK:
+	XOR	A		; A=00 -- ACK RECEIVED, FORCE Z
 	JR	PCF_WFA2
 PCF_WFA1:
-	CPL			; TIMOUT ERROR
+	LD	A,0FFH		; TIMEOUT -- FAILURE REASON = FF
+	OR	A		; FORCE NZ
 PCF_WFA2:
-	POP	HL		; EXIT WITH NZ = FF
+	POP	BC
+	POP	HL
 	RET
 ;
 ;--------------------------------------------------------------------------------
@@ -400,12 +451,18 @@ PCF_WAIT_FOR_BB:
 PCF_WFBB0:
 	IN	A,(PCF_RS1)
 	AND	PCF_BB
-	RET	Z		; BUS IS FREE RETURN ZERO
+	JR	NZ,PCF_WFBB_OK	; BB=1 MEANS FREE (SEE COMMENT ABOVE)
 	DEC	HL
 	LD	A,H
 	OR	L
 	JR	NZ,PCF_WFBB0	; REPEAT IF NOT TIMED OUT
 	CPL		  	; RET NZ IF TIMEOUT
+	RET
+PCF_WFBB_OK:
+	; FLAGS HERE ARE NZ (FROM THE "AND PCF_BB" CHECK THAT GOT US HERE), BUT
+	; EVERY CALLER CHECKS NZ=FAILURE. FORCE Z ON THE WAY OUT (CP A DOESN'T
+	; CHANGE A, ONLY SETS Z).
+	CP	A
 	RET
 ;
 ;-----------------------------------------------------------------------------
@@ -475,6 +532,8 @@ PCF_PRTERR:
 	CALL	PRTSTR
 ;	CALL	NEWLINE
 	POP	HL
+	; FORCE NZ THIS IS THE ERROR PATH
+	OR	$FF
 	RET
 ;
 ;-----------------------------------------------------------------------------
@@ -521,7 +580,7 @@ PCF_BBFAIL	.DB	"BUS BUSY$"
 ;
 END_PCF	.EQU	$
 SIZ_PCF	.EQU	END_PCF - ORG_PCF
-;	
+;
 	MEMECHO	"PCF occupies "
 	MEMECHO	SIZ_PCF
 	MEMECHO	" bytes.\n"

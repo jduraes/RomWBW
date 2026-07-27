@@ -1801,8 +1801,6 @@ The following table shows the disk images available.
 | xxx_games.img     | Games Disk for CP/M                  | No       |
 | xxx_hitechc.img   | HI-TECH Z80 CP/M C compiler          | No       |
 | xxx_infocom.img   | Infocom Games Disk                   | No       |
-| xxx_msxroms1.img  | MSX ROMs Disk 1                      | No       |
-| xxx_msxroms2.img  | MSX ROMs Disk 2                      | No       |
 | xxx_nzcom.img     | NZCOM ZCPR 3.4 Operating System      | Yes      |
 | xxx_qpm.img       | QPM Operating System                 | Yes      |
 | xxx_tpascal.img   | Borland Turbo Pascal Compiler        | No       |
@@ -2043,17 +2041,17 @@ ready to write to your media.
 
 You can add slices to the Combo Disk Images simply by tacking
 slices onto the end.  For example, if you want to add a slice
-containing the MSX ROMs to the end of the combo image, you could
+containing the Fortran compilerto the end of the combo image, you could
 use one of the following command lines depending on your operating
 system:
 
 Windows:
 
-`COPY /B hd1k_combo.img + hd1k_msxroms.img my_hd.img` 
+`COPY /B hd1k_combo.img + hd1k_fortran.img my_hd.img` 
 
 Linus/MaxOS:
 
-`cat hd1k_combo.img hd1k_msxroms.img >my_hd.img`
+`cat hd1k_combo.img hd1k_fortran.img >my_hd.img`
 
 Note that you **must** be sure to use either the hd1k_ or hd512_
 prefixed files together.  You cannot mix them.
