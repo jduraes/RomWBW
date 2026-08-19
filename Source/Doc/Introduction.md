@@ -340,7 +340,7 @@ please let me know if I missed you!
   source for ZSDOS2 and the BPBIOS utilities as well as for
   NZCOM.
 
-* Marshall Gates has contriubed sample program source files for all
+* Marshall Gates has contributed sample program source files for all
   of the language disk images.
 
 * Randy Merkel provided the ZSDOS Programmer's Manual as translated
@@ -351,7 +351,9 @@ please let me know if I missed you!
 * Jay Cotton provided the SCSI transport code upon which the SCSI
   driver is based.
 
-* Willy De la Court added an I2C variant of the LCD driver.
+* Willy De la Court added an I2C variant of the LCD driver and an
+  I2C EEPROM driver w/ test application.  He also made some fixes
+  to uz80as.
 
 `\clearpage`{=latex}
 

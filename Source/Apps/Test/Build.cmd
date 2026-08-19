@@ -23,6 +23,7 @@ call :build portscan || exit /b
 call :build termqry || exit /b
 call :build sound || exit /b
 call :build testh8p || exit /b
+call :build i2ceeprom || exit /b
 
 goto :eof
 

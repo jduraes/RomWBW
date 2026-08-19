@@ -1,6 +1,6 @@
 RomWBW Introduction
 Wayne Warthen (wwarthen@gmail.com)
-24 Jul 2026
+18 Aug 2026
 
 
 
@@ -362,7 +362,7 @@ let me know if I missed you!
 - Jörg Linder has contributed disassembled and nicely commented source
   for ZSDOS2 and the BPBIOS utilities as well as for NZCOM.
 
-- Marshall Gates has contriubed sample program source files for all of
+- Marshall Gates has contributed sample program source files for all of
   the language disk images.
 
 - Randy Merkel provided the ZSDOS Programmer’s Manual as translated by
@@ -373,7 +373,8 @@ let me know if I missed you!
 - Jay Cotton provided the SCSI transport code upon which the SCSI driver
   is based.
 
-- Willy De la Court added an I2C variant of the LCD driver.
+- Willy De la Court added an I2C variant of the LCD driver and an I2C
+  EEPROM driver w/ test application. He also made some fixes to uz80as.
 
 
 Related Projects
