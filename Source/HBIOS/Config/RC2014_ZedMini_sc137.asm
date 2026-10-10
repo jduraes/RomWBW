@@ -1,6 +1,6 @@
 ;
 ;==================================================================================================
-;   ROMWBW CUSTOM BUILD: RC2014 Z80 + SC137 I2C MASTER + DS3231 RTC
+;   ROMWBW CUSTOM BUILD: RC2014 ZED MINI (Z80) + SC137 I2C MASTER + DS3231 RTC
 ;==================================================================================================
 ;
 ; INHERITS RC2014_std AND ADDS:
@@ -8,7 +8,7 @@
 ;   - DS3231 RTC AT I2C ADDRESS $68 VIA THE SC137
 ;   - DS1302 LATCH DRIVER DISABLED (NOT FITTED ON THIS MACHINE)
 ;
-; BUILD:  Source\HBIOS\Build.cmd RC2014 sc137 rc2014sc137
+; BUILD:  Source\HBIOS\Build.cmd RC2014 ZedMini_sc137 rc2014sc137
 ; OUTPUT: Binary\rc2014sc137.rom / .upd
 ;
 #DEFINE AUTO_CMD	""		; AUTO CMD WHEN BOOT_TIMEOUT IS ENABLED
