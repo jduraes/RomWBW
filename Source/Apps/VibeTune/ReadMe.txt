@@ -1,6 +1,18 @@
 VibeTune (VTUNE) for RomWBW
 ===========================
 
+> **FROZEN — 29-May-2026**
+>
+> This in-tree VibeTune effort (forked from Tune on 08-Apr-2026, last
+> commit 29-May-2026, with uncommitted local edits through 27-Jul-2026)
+> is preserved as-is and is no longer being developed here.
+>
+> Active development continues in the standalone VibeTune repository:
+> https://github.com/jduraes/vibetune
+> That line focuses on PT2/PT3/MYM playback with the ANSI/VT100 playlist
+> UI and TurboSound support; it does not include the VGM chip support
+> (SN76489/OPL2/OPL3/OPM) present in this frozen tree.
+
 Overview
 --------
 VibeTune is the enhanced RomWBW music player for PT2/PT3/MYM and VGM files.

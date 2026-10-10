@@ -235,6 +235,7 @@ UNINIT:
 	RET			; Just return
 ;
 HUNINIT:
+	CALL	HB_FLUSHRX	; drain pending RX bytes before device reset
 	; HBIOS: Reset character device 0
 	LD	B,04H		; HBIOS CIOINIT function 0x04
 	LD	A,(UNIT)	; HBIOS serial unit number
@@ -242,6 +243,22 @@ HUNINIT:
 	LD	DE,-1		; Reset w/ current settings
 	RST	08		; Do it
 	RET			; not initialized, so no 'UN-INITIALIZE'
+
+;
+; Drain a bounded amount of pending RX from HBIOS fastpath channel.
+; Z is returned by HB_RCVRDY when a character is available.
+;
+HB_FLUSHRX:
+	PUSH	BC
+	LD	B,64
+HB_FLUSHRX1:
+	CALL	HB_RCVRDY
+	JR	NZ,HB_FLUSHRX2
+	CALL	HB_MDIN
+	DJNZ	HB_FLUSHRX1
+HB_FLUSHRX2:
+	POP	BC
+	RET
 ;
 UUNINIT:
 	; UBIOS: Reset character device 0

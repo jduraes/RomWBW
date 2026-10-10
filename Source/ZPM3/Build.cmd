@@ -26,10 +26,10 @@ echo.
 echo.
 echo *** ZPM Loader ***
 echo.
-zxcc LINK -ZPMLDRD[L100]=ZPM3LDR,BIOSLDRD,UTIL || exit /b
+zxcc LINK -ZPMLDRD[L100]=ZPM3LDR,BIOSLDRD,UTIL < NUL || exit /b
 :: zxcc SLRNK -ZPM3LDR,BIOSLDRD,UTIL,ZPMLDRD/N/E
 move /Y zpmldrd.com zpmldr.bin || exit /b
-zxcc LINK -ZPMLDRC[L100]=ZPM3LDR,BIOSLDRC,UTIL || exit /b
+zxcc LINK -ZPMLDRC[L100]=ZPM3LDR,BIOSLDRC,UTIL < NUL || exit /b
 :: zxcc SLRNK -ZPM3LDR,BIOSLDRC,UTIL,ZPMLDRC/N/E
 move /Y zpmldrc.com zpmldr.com || exit /b
 rem pause

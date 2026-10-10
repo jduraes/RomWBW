@@ -90,6 +90,11 @@ if (($Platform -eq "SC720") -and ($Config -eq "std") -and ($ROMName -eq "SC720_s
     $ROMName = "sc720std"
 }
 
+# SC126 standard build - boot CONFIG is SCZ180_sc126_std; 8.3 files sc126std.*
+if (($Platform -eq "SCZ180") -and ($Config -eq "sc126_std") -and ($ROMName -eq "SCZ180_sc126_std")) {
+	$ROMName = "sc126std"
+}
+
 # RCZ80: minramd config - boot CONFIG is RCZ80_minramd; 8.3 files rcz80min.*
 if (($Platform -eq "RCZ80") -and ($Config -eq "minramd") -and ($ROMName -eq "RCZ80_minramd")) {
     $ROMName = "rcz80min"

@@ -27,6 +27,10 @@ TIM2	LD	B,$F8			; BIOS SYSGET function
 ;
 	; Delay spin loop (40 tstates per loop)
 DLY	LD	BC,(QDLY)		; Load quark delay factor
+	LD	A,B
+	OR	C
+	LD	BC,1
+	JR	NZ,DLY1
 DLY1	DEC	BC              	; [6]
 	NOP				; [4]
 	NOP				; [4]
@@ -80,8 +84,8 @@ VT_APPLY_DLY_BIAS:
 	LD	DE,VT_DLY_BIAS
 	OR	A
 	SBC	HL,DE
-	JP	PE,VT_APPLY_DLY_BIAS_OK
-	LD	HL,0
+	JR	NC,VT_APPLY_DLY_BIAS_OK
+	LD	HL,(QDLY0)		; underflow: keep usable delay
 VT_APPLY_DLY_BIAS_OK:
 	LD	(QDLY),HL
 	RET

@@ -84,7 +84,7 @@ New-Item -ItemType Directory -Path $backupDir, $tempDir -Force | Out-Null
 
 $part = Get-Partition -DriveLetter $DriveLetter -ErrorAction SilentlyContinue
 if ($UsePhysicalDisk) {
-    $backupSize = (Get-Item $combo).Length
+    $backupSize = [int64](Get-Disk -Number $DiskNumber).Size
 } else {
     $disk = Get-Disk -Number $part.DiskNumber
     $backupSize = [int64]$disk.Size - [int64]$part.Offset
@@ -95,17 +95,17 @@ if (-not $WhatIf) {
     try {
         $out = [System.IO.File]::Create($backupPath)
         try {
-            if ($UsePhysicalDisk) { $fs.CopyTo($out) }
-            else {
-                $buf = New-Object byte[] 65536
-                $remaining = $backupSize
-                while ($remaining -gt 0) {
-                    $read = [Math]::Min($buf.Length, $remaining)
-                    $n = $fs.Read($buf, 0, $read)
-                    if ($n -le 0) { break }
-                    $out.Write($buf, 0, $n)
-                    $remaining -= $n
-                }
+            # Always copy an exact byte count: a raw disk stream read past the
+            # end of the media fails with "The drive cannot find the sector
+            # requested", so a plain CopyTo cannot be used.
+            $buf = New-Object byte[] 65536
+            $remaining = $backupSize
+            while ($remaining -gt 0) {
+                $read = [Math]::Min($buf.Length, $remaining)
+                $n = $fs.Read($buf, 0, $read)
+                if ($n -le 0) { break }
+                $out.Write($buf, 0, $n)
+                $remaining -= $n
             }
         } finally { $out.Close() }
     } finally { $fs.Close() }

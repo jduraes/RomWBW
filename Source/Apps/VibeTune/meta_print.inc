@@ -6,6 +6,30 @@
 ; For TurboSound files we suppress the single-chip hardware description.
 ; Sets INFOLINE non-zero if a mode line was printed and should be followed by CRLF2.
 ;
+; Hardware/mode line for single-file PT2/PT3 without TS_DETECT scan of module RAM.
+PRTPLAYINFO_LITE:
+	XOR	A
+	LD	(INFOLINE),A
+	CALL	CRLF
+	LD	A,(HBIOSMD)
+	OR	A
+	JR	NZ,PRTPLAYINFO_LITE_HB
+	LD	DE,MSGTSPRE
+	CALL	PRTSTR
+	LD	DE,(DESC)
+	CALL	PRTSTR
+	CALL	PRTWMOD
+	LD	A,$FF
+	LD	(INFOLINE),A
+	RET
+PRTPLAYINFO_LITE_HB:
+	LD	DE,MSGHBIOS
+	CALL	PRTSTR
+	CALL	PRTWMOD
+	LD	A,$FF
+	LD	(INFOLINE),A
+	RET
+
 PRTPLAYINFO:
 	LD	A,(UI_ACTIVE)
 	OR	A

@@ -1,0 +1,6 @@
+@Label="MSX ROMS 1"
+@SysImage="../ZSDOS/zsys_wbw.sys"
+#
+# Add the ReadMe document
+#
+d_msxroms1/ReadMe.txt 0:

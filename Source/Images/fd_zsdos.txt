@@ -17,7 +17,7 @@ d_cpm22/u0/*.* 0:
 ../../Binary/Apps/reboot.com 0:
 ../../Binary/Apps/fat.com 0:
 ../../Binary/Apps/fdu.com 0:
-../../Binary/Apps/fdu.doc 0:
+# ../../Binary/Apps/fdu.doc 0:   # Omitted from fd144 image to preserve space
 ../../Binary/Apps/format.com 0:
 ../../Binary/Apps/mode.com 0:
 ../../Binary/Apps/rtc.com 0:
@@ -32,7 +32,7 @@ d_cpm22/u0/*.* 0:
 ../../Binary/Apps/xm.com 0:
 ../../Binary/Apps/zmp.com 0:
 ../../Binary/Apps/zmp.hlp 0:
-../../Binary/Apps/zmp.doc 0:
+# ../../Binary/Apps/zmp.doc 0:   # Omitted from fd144 image to preserve space
 ../../Binary/Apps/zmp.cfg 0:
 ../../Binary/Apps/zmp.fon 0:
 ../../Binary/Apps/zmxfer.ovr 0:
@@ -52,6 +52,7 @@ d_cpm22/u0/*.* 0:
 Common/All/u10/*.* 0:
 Common/All/u14/*.* 0:
 Common/All/u15/*.* 0:
-Common/CPM22/*.* 0:
+# Common/CPM22/*.* 0:   # KERCPM22.COM omitted from fd144 image to preserve space
+Common/CPM22/HELLO.ASM 0:
 Common/Z/u14/*.* 0:
 Common/Z/u15/*.* 0:

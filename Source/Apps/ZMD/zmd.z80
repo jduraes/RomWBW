@@ -800,7 +800,7 @@ READERR:CALL	ILPRTB
 	DB	CR,LF
 	DB	'-- Read Error: ',0
 	CALL	SHONM3
-	JP	EXIT
+	JP	SAFEEXIT
 
 ;
 ; Now send the next record
@@ -1535,7 +1535,7 @@ SZMD8:	LD	A,(FILCNT)	; Any files to send?
 	JP	Z,ABORT		; If not, don't act like we did
 	CALL	EOFSND		; No more files so send EOT to finish
 	CALL	XFRDON
-	JP	EXIT
+	JP	SAFEEXIT
 
 ;
 ; Now send the 128 byte filename record
@@ -1738,7 +1738,7 @@ WRBLOK1:PUSH	HL
 	DB	CR,LF
 	DB	'-- Write Error: ',0
 	CALL	SHONM3
-	JP	EXIT
+	JP	SAFEEXIT
 
 WRBLOK2:LD	HL,128		; Length of 1 record
 	ADD	HL,DE		; 'HL'= next buff
@@ -4566,7 +4566,7 @@ SPACE2:	CALL	WHLCHK
 	LD	A,1
 	LD	(PRVSPC),A
 	CALL	SPACE8
-	JP	EXIT		; Exit to CP/M
+	JP	SAFEEXIT		; Exit to CP/M
 
 ;
 ; Displays the file descriptor/category when showing available upload space.
@@ -4696,7 +4696,17 @@ HELP2:	CALL	ILPRTB
 	DB	CR,LF
     	DB	'   filenames on command line (can also be forced with'
 	DB	' ''SB'' mode).',0
-	JP	EXIT 
+	JP	SAFEEXIT
+
+;
+; Exit wrapper to avoid leaving stray received bytes in console input queue.
+; Only flush when comm layer was initialized.
+;
+SAFEEXIT:
+	LD	A,(INITFLG)
+	OR	A
+	CALL	NZ,CATCH
+	JP	EXIT
 
 
 ABRTMSG:CALL	ILPRTB

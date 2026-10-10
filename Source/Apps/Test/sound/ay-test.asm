@@ -13,9 +13,8 @@
 ;
 ; Hardware port addresses
 ;
-rsel	.equ	$A4		; Register seelection port address
-rdat	.equ	$A5		; Register data port address
-acr	.equ	$A2		; Aux control register port address
+rsel	.equ	$60		; Register selection port address
+rdat	.equ	$68		; Register data port address
 ;
 ; CPU speed for delay scaling
 ;
@@ -39,9 +38,6 @@ conwrt	.equ	2		; BDOS console write char
 	ld	de,banner	; load banner string address
 	ld	c,print		; BDOS print function number
 	call	bdos		; do it
-;
-	ld	a,$FF		; SCG board activation value
-	out	(acr),a		; write value to ACR
 ;
 	xor	a		; zero accum
 	ld	(chan),a	; init channel number
@@ -189,7 +185,7 @@ chan	.db	0		; active audio channel
 pitch	.dw	0		; current pitch
 ;
 banner	.text	"\r\nRetroBrew Computers SCG AY-3-8910 Sound Test\r\n"
-	.text	"Set SCG board base I/O address to 0x98\r\n$"
+	.text	"Using AY ports: RSEL=0x60, RDAT=0x68\r\n$"
 chmsg	.text	"\r\nPlaying descending tones on channel $"
 chmsg2	.text	"...$"
 crlf	.text	"\r\n$"

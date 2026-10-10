@@ -20,13 +20,13 @@ copy optdsk.lib ldropts.lib || exit /b
 zxcc Z80ASM -BIOSLDR/MF || exit /b
 move /Y biosldr.rel biosldrd.rel || exit /b
 move /Y biosldr.lst biosldrd.lst || exit /b
-zxcc LINK -CPMLDRD[L100]=CPMLDR,BIOSLDRD,UTIL || exit /b
+zxcc LINK -CPMLDRD[L100]=CPMLDR,BIOSLDRD,UTIL < NUL || exit /b
 move /Y cpmldrd.com cpmldr.bin || exit /b
 copy optcmd.lib ldropts.lib || exit /b
 zxcc Z80ASM -BIOSLDR/MF || exit /b
 move /Y biosldr.rel biosldrc.rel || exit /b
 move /Y biosldr.lst biosldrd.lst || exit /b
-zxcc LINK -CPMLDRC[L100]=CPMLDR,BIOSLDRC,UTIL || exit /b
+zxcc LINK -CPMLDRC[L100]=CPMLDR,BIOSLDRC,UTIL < NUL || exit /b
 move /Y cpmldrc.com cpmldr.com || exit /b
 rem pause
 
@@ -44,7 +44,7 @@ zxcc Z80ASM -MOVE/MF || exit /b
 zxcc Z80ASM -DRVTBL/MF || exit /b
 zxcc Z80ASM -DISKIO/MF || exit /b
 zxcc Z80ASM -UTIL/MF || exit /b
-zxcc LINK -BIOS3[OS]=BIOSKRNL,SCB,BOOT,CHARIO,MOVE,DRVTBL,DISKIO,UTIL || exit /b
+zxcc LINK -BIOS3[OS]=BIOSKRNL,SCB,BOOT,CHARIO,MOVE,DRVTBL,DISKIO,UTIL < NUL || exit /b
 zxcc GENCPM -AUTO -DISPLAY || exit /b
 copy cpm3.sys cpm3res.sys || exit /b
 rem pause
@@ -63,7 +63,7 @@ zxcc Z80ASM -MOVE/MF || exit /b
 zxcc Z80ASM -DRVTBL/MF || exit /b
 zxcc Z80ASM -DISKIO/MF || exit /b
 zxcc Z80ASM -UTIL/MF || exit /b
-zxcc LINK -BNKBIOS3[B]=BIOSKRNL,SCB,BOOT,CHARIO,MOVE,DRVTBL,DISKIO,UTIL || exit /b
+zxcc LINK -BNKBIOS3[B]=BIOSKRNL,SCB,BOOT,CHARIO,MOVE,DRVTBL,DISKIO,UTIL < NUL || exit /b
 zxcc GENCPM -AUTO -DISPLAY || exit /b
 copy cpm3.sys cpm3bnk.sys || exit /b
 rem pause
@@ -82,7 +82,7 @@ zxcc Z80ASM -MOVE/MF || exit /b
 zxcc Z80ASM -DRVTBL/MF || exit /b
 zxcc Z80ASM -DISKIO/MF || exit /b
 zxcc Z80ASM -UTIL/MF || exit /b
-zxcc LINK -ZPMBIOS3[B]=BIOSKRNL,SCB,BOOT,CHARIO,MOVE,DRVTBL,DISKIO,UTIL || exit /b
+zxcc LINK -ZPMBIOS3[B]=BIOSKRNL,SCB,BOOT,CHARIO,MOVE,DRVTBL,DISKIO,UTIL < NUL || exit /b
 rem zxcc GENCPM -AUTO -DISPLAY || exit /b
 rem copy cpm3.sys zpm3.sys || exit /b
 rem pause

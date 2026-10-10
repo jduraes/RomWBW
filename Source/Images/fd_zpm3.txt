@@ -57,8 +57,7 @@ d_cpm3/u0/HELP.HLP 0:
 Common/All/u14/*.* 14:
 Common/All/u15/*.* 15:
 Common/CPM3/*.* 15:
-Common/Z/u14/*.* 14:
 Common/Z/u15/*.* 15:
-Common/Z3/u10/*.* 10:
+# Common/Z3/u10/*.* 10:   # Omitted from fd144 image to preserve space
 Common/Z3/u14/*.* 14:
-Common/Z3/u15/*.* 15:
+# Common/Z3/u15/*.* 15:   # Omitted from fd144 image to preserve space

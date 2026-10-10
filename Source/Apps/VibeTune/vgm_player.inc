@@ -55,6 +55,9 @@ VGM_RD_NEXT_ERR:
 ; Like VGM_RD_NEXT, but abort to ERRVGMRD_STR if MMU read failed (VGMRDERR set).
 VGM_RD_NEXT_EX:
 	CALL	VGM_RD_NEXT
+	LD	A,(FILTYP)
+	CP	TYPVGM
+	RET	NZ			; never fatal on PT3/MYM bytes at MDLADDR
 	PUSH	AF
 	LD	A,(VGMRDERR)
 	OR	A

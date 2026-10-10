@@ -6,9 +6,9 @@
 ; HBIOS VERSION BY PHIL SUMMERS (B1ACKMAILER) DIFFICULTLEVELHIGH@GMAIL.COM
 ;
 PCFECB		.EQU	0
-PCFDUO		.EQU	1
+PCFDUO		.EQU	0
 P8X180		.EQU	0
-SC126		.EQU	0
+SC126		.EQU	1
 SC137		.EQU	0
 ;
 #IF (PCFECB)
@@ -50,6 +50,11 @@ I2C_BASE	.EQU	20h
 _sda		.EQU	7
 _scl		.EQU	0
 _idle		.EQU	10000001B
+#ENDIF
+;
+#IF !(PCFECB | PCFDUO)
+PCF_RS0		.EQU	I2C_BASE
+PCF_RS1		.EQU	I2C_BASE
 #ENDIF
 ;
 ;-----------------------------------------------------------------------------
@@ -111,31 +116,15 @@ lp2b:	push	de
 ; . issue device stop command.
 ; . delay
 ; . display response
-
-;	call	_i2c_start
-;	ld	a,(addr)
-;	ld	c,a
-;	call	_i2c_write
-;	ld	(rc),a
-;	call	_i2c_stop
-
-	CALL	PCF_WAIT_FOR_BB
-	JP	NZ,PCF_BBERR
-;	
-	LD	A,(addr)
-        OUT	(PCF_RS0),A
-        CALL	PCF_START	; GENERATE START CONDITION
-;
-	ld	bc,100		; delay
-lp6:	nop
-	dec	bc
-	ld	a,c
-	or	b
-	jr	nz,lp6
-
-	CALL	PCF_WAIT_FOR_ACK; AND ISSUE THE SLAVE ADDRESS
+	call	_i2c_start
+	ld	a,(addr)
+	ld	c,a
+	call	_i2c_write
+	ld	(rc),a
+	call	_i2c_stop
+	ld	a,(rc)
 	or	a
-	jp	nz,lp4f
+	jp	z,lp4f
 
 	ld	c,'-'		; display no
 	call	_cout		; response
@@ -150,8 +139,6 @@ lp4f:	ld	a,(addr)	; adjust address
 lp5f:	ld	a,(addr)	; next address
 	add	a,2		; adjust for 
 	ld	(addr),a	; 7-bit
-
-	CALL	PCF_STOP
 
 	pop	de		; check if
 	dec	e		; reached end
@@ -239,8 +226,15 @@ PCF_START:
         LD     A,PCF_START_  
 	OUT    (PCF_RS1),A
 	RET
+;
+_i2c_write:
+	LD	A,C
+	OUT	(PCF_RS0),A
+	CALL	PCF_START
+	CALL	PCF_WAIT_FOR_ACK
+	RET
 #ELSE
-;_i2c_start:
+_i2c_start:
 	ld	a,_idle		; issue 
 	out	(I2C_BASE),a	; start
 				; command
@@ -442,7 +436,7 @@ PCF_STOP:
         OUT  	(PCF_RS1),A     ; stop
         RET                     ; command
 #ELSE
-;_i2c_stop:			
+_i2c_stop:			
 	ld	a,(oprval)	
 	res	_scl,a		
 	res	_sda,a

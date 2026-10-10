@@ -1,0 +1,26 @@
+# RC2014 Zed Mini 1.8" HDD slice layout (as shipped by Spencer / z80kits,
+# 23 slices, order confirmed via the RomWBW boot loader slice inventory
+# on the target machine 2026-10-02). Slice index = line order (0-based).
+cpm22
+zsdos
+nzcom
+cpm3
+zpm3
+wp
+aztecc
+bascomp
+bp
+cobol
+cowgol
+dos65
+fortran
+games
+hitechc
+infocom
+qpm
+tpascal
+z80asm
+blank
+blank
+blank
+blank

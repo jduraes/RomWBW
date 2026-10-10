@@ -17,6 +17,9 @@ GOPTX
 	LD	HL,(QDLY)		; Get basic quark delay
 	OR	A				; Clear carry
 	SBC	HL,DE			; Adjust for file type
+	JR	NC,GOPTXQDOK
+	LD	HL,(QDLY0)		; underflow: restore base delay
+GOPTXQDOK:
 	LD	(QDLY),HL		; Save updated quark delay factor
 
 	LD	A,(UI_ACTIVE)
@@ -46,20 +49,16 @@ GOPTXSP2:
 PTXINITT:
 	CALL	TS_ADJTIM_IMPL	; adjust delay timing for TS (Tune/b147)
 	CALL	TS_INIT			; init both PT3 instances
+	CALL	FLUSHKEYS
+	CALL	PRTPLAYMSG
 	JR	PTXSTART
 PTXINITN:
-	CALL	START			; Do initialization
+	CALL	START			; Do initialization (INIT ends via ROUT)
+	CALL	FLUSHKEYS		; drop command-line Enter after INIT
+	CALL	PRTPLAYMSG		; Tune: status after INIT, keys flushed
+	CALL	DBG_DUMP_STATE		; TEMP diagnostic: dump player pointers
 ;
 PTXSTART:
-	LD	A,(ALLMD)
-	OR	A
-	JR	NZ,PTXSTARTF
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,PTXSTART0
-PTXSTARTF:
-	CALL	FLUSHKEYS
-PTXSTART0:
 	; b147/Tune: no VT_APPLY_DLY_BIAS on dual TurboSound (added later for RC2014 PT3)
 	LD	A,(TSFLAG)
 	OR	A
@@ -67,11 +66,20 @@ PTXSTART0:
 	LD	A,(TS_DUALHW)
 	OR	A
 	JR	Z,PTXSTART0_BIAS
-	JR	PTXSTART0_MSG
+	JR	PTXSTART0_DONE
 PTXSTART0_BIAS:
+	LD	A,(ALLMD)
+	OR	A
+	JR	NZ,PTXSTART0_BIAS1
+	LD	A,(WMOD)
+	OR	A
+	JR	NZ,PTXSTART0_DONE	; single-file timer: match Tune (no delay bias)
+PTXSTART0_BIAS1:
 	CALL	VT_APPLY_DLY_BIAS
-PTXSTART0_MSG:
-	CALL	PRTPLAYMSG		; Playing message
+PTXSTART0_DONE:
+	XOR	A
+	LD	(PAUSEMD),A		; never inherit playlist pause into a new track
+	CALL	FLUSHKEYS		; clear console before first quark
 ;
 PTXLP:	LD	A,(TSFLAG)
 	OR	A
@@ -93,6 +101,19 @@ PTXLP_NORM:
 	BIT	7,A				; Check bit 7 (loop point passed)
 	JP	NZ,EXIT			; Bail out when done playing
 PTXLP_KEY:
+	LD	A,(ALLMD)
+	OR	A
+	JR	NZ,PTXLP_KEY_PLAYBACK
+	; Single-file: Esc quits, Space pauses. Enter/others ignored so the
+	; leftover command-line Enter cannot trigger a spurious startup pause.
+	CALL	GETKEY
+	JR	Z,PTXLP_KEY1
+	CP	27			; Esc
+	JP	Z,EXIT
+	CP	' '
+	JR	Z,PTXLP_PAUSE_TOGGLE
+	JR	PTXLP_KEY1
+PTXLP_KEY_PLAYBACK:
 	LD	D,0
 	CALL	PLAYBACK_PLAY_STEP
 	LD	A,B
@@ -106,20 +127,16 @@ PTXLP_PAUSE_TOGGLE:
 	JP	NZ,PTXLP_PAUSE_WAIT
 	JP	PTXLP_KEY1
 PTXLP_PAUSE_WAIT:
-	LD	D,$80
-	CALL	PLAYBACK_PAUSE_STEP
-	LD	A,B
-	OR	A
-	JP	Z,PTXLP_PAUSE_WAIT1
-	CP	2
-	JR	Z,PTXLP_PAUSE_OFF
-	JP	EXIT
-PTXLP_PAUSE_WAIT1:
 	CALL	WAITQ
+	CALL	GETKEY
+	JR	Z,PTXLP_PAUSE_WAIT
+	CP	27			; Esc quits from pause
+	JP	Z,EXIT
+	CP	' '			; Space resumes
+	JR	Z,PTXLP_PAUSE_OFF
 	JR	PTXLP_PAUSE_WAIT
 PTXLP_PAUSE_OFF:
 	CALL	KEY_PAUSE_OFF
-	JP	NZ,EXIT
 	JP	PTXLP_KEY1
 PTXLP_KEY1:
 	; b147/Tune: always WAITQ after play/key (delay or timer via WMOD)

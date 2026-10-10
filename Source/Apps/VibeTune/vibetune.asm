@@ -139,12 +139,13 @@ ACBBAC			.EQU	0	; 3) Allow channels allocation bits at (START+10)
 LoopChecker		.EQU	1	; 4) Allow loop checking and disabling
 Id				.EQU	1	; 5) Insert official identificator
 ; VTBANREL: debug build token only (bNNN). Revision stays literal v0.1 in MSGBAN.
-#DEFINE VTBANREL "b170"
+#DEFINE VTBANREL "b183"
 
 	.ORG	$0100
 ;
 	CALL	CLI_PREP
 	CALL	HEAPENDB_INIT		; load ceiling before banner / any VGM sizing
+	CALL	INIT_RUNTIME_FLAGS	; clear VGM/pause latches (CP/M BSS may be stale)
 	CALL	CLI_HAVE_CREDITS_SWITCH
 	LD	A,(CREDMD)
 	OR	A
@@ -294,6 +295,8 @@ PLAYNEXT:
 	LD	(DELREQ),A
 	LD	(PAUSEMD),A
 	LD	(DELCNT),A
+	LD	(PREVLOADBYTES),A
+	LD	(PREVLOADBYTES+1),A
 	LD	HL,(QDLY0)
 	LD	(QDLY),HL
 	LD	A,(ALLMD)
@@ -410,7 +413,9 @@ _LD	LD	HL,(DMA)		; Get load address
 	LD	DE,128			; Bump by size of
 	ADD	HL,DE			; ... one record
 	LD	(DMA),HL		; Save for next loop
-	LD	A,(HEAPENDB)	; A := dynamic page limit (BDOS - 1 page)
+	; PTx/MYM: same ceiling as Tune.COM (0xC000), not BDOS-1 page alone.
+	; HEAPENDB alone can truncate 4KB PT3 on SC126 and crash INIT.
+	LD	A,HEAPEND >> 8
 	CP	H				; Check to see if limit hit
 	JP	Z,ERRSIZ		; Handle size error
 	POP	DE				; Restore current DMA to DE
@@ -619,10 +624,49 @@ VGM_LOAD_MMU_DONE:
 	JP	C,ERRVGMRD_PRI
 	JP	_LDX
 ;
+; Zero stale PTx bytes after a shorter playlist load (e.g. Attack after rl2wofts).
+PT3_SANITIZE_BUF:
+	LD	A,(FILTYP)
+	CP	TYPPT3
+	JR	Z,PT3SB0
+	CP	TYPPT2
+	JR	Z,PT3SB0
+	RET
+PT3SB0:
+	LD	HL,(PREVLOADBYTES)
+	LD	A,H
+	OR	L
+	RET	Z			; no prior load (uninit TPA must not clear RAM)
+	LD	DE,(LOADBYTES)
+	OR	A
+	SBC	HL,DE			; prev - cur
+	RET	C			; cur > prev
+	RET	Z			; same size
+	LD	A,H
+	OR	A
+	RET	NZ			; refuse huge bogus clear counts
+	LD	B,H
+	LD	C,L			; bytes to clear
+	LD	HL,(LOADBYTES)
+	LD	DE,MDLADDR
+	ADD	HL,DE
+	XOR	A
+PT3SB_CLR1:
+	LD	(HL),A
+	INC	HL
+	DEC	BC
+	LD	A,B
+	OR	C
+	JR	NZ,PT3SB_CLR1
+	RET
+;
 _LDX	LD	C,16			; CPM Close File function
 	LD	DE,FCB			; FCB
 	CALL	BDOS			; Do it
+	CALL	PT3_SANITIZE_BUF
 	CALL	META_SNAPSHOT		; preserve title/artist for stable redraw
+	LD	HL,(LOADBYTES)
+	LD	(PREVLOADBYTES),HL
 ;
 	LD	A,(ALLMD)
 	OR	A
@@ -635,12 +679,52 @@ _LDX	LD	C,16			; CPM Close File function
 	LD	(PLSHOWN),A
 _LDX0:
 	XOR	A
+	LD	(VGMFLAG),A
+	LD	(VGMMMUMD),A
+	LD	(VGMWSTRM),A
+	LD	(VGMWINVAL),A
+	LD	(VGMRDERR),A
+	LD	(vgmpos),A
+	LD	(vgmpos+1),A
+	LD	(vgmpos+2),A
+	LD	(VGMLOADSZ),A
+	LD	(VGMLOADSZ+1),A
+	LD	(VGMLOADSZ+2),A
+	LD	(TSFLAG),A
+	LD	(TS_OFF2),A
+	LD	(TS_OFF2+1),A
+	LD	(TS_LEN2),A
+	LD	(TS_LEN2+1),A
 	LD	(TS_CHIP1_PORTS),A
 	LD	(TS_CHIP1_PORTS+1),A
 	CALL	UI_CLEAR_TRACK_BLOCK
-	; Post-load: print hardware / TurboSound info
+	; Post-load hardware line (playlist needs full TS probe of module)
+	LD	A,(ALLMD)
+	OR	A
+	JR	NZ,_LDX0_PI
+	LD	A,(FILTYP)
+	CP	TYPPT3
+	JR	Z,_LDX0_PILITE
+	CP	TYPPT2
+	JR	Z,_LDX0_PILITE
+_LDX0_PI:
 	CALL	PRTPLAYINFO
+	JR	_LDX0_PI_DONE
+_LDX0_PILITE:
+	CALL	PRTPLAYINFO_LITE
+_LDX0_PI_DONE:
 	;
+	; Module bytes at MDLADDR override FILTYP (Vortex also starts with 'V').
+	CALL	BUF_IS_PTX
+	JR	NZ,_LDX0_DISPATCH
+	LD	A,(MDLADDR+11)
+	CP	'2'
+	LD	A,TYPPT2
+	JR	Z,_LDX0_PTXOK
+	LD	A,TYPPT3
+_LDX0_PTXOK:
+	LD	(FILTYP),A
+_LDX0_DISPATCH:
 	LD	A,(FILTYP)		; Get file type
 	CP	TYPPT3			; PT3?
 	JR	Z,GOPT3			; If so, do it
@@ -656,7 +740,124 @@ _LDX0:
 
 #include "vgm_runtime.inc"
 
+; Compare B bytes at HL with string at DE. Returns Z if equal.
+BUF_CMP_DEHL:
+	LD	A,(DE)
+	CP	(HL)
+	INC	DE
+	INC	HL
+	JR	NZ,BUF_CMP_FAIL
+	DJNZ	BUF_CMP_DEHL
+	XOR	A
+	RET
+BUF_CMP_FAIL:
+	OR	$FF
+	RET
+
+; Returns Z if MDLADDR holds a ProTracker / Vortex PT module.
+BUF_IS_PTX:
+	LD	HL,MDLADDR
+	LD	A,(HL)
+	CP	'P'
+	JR	Z,BUF_IS_PTX_PRO
+	CP	'V'
+	JR	NZ,BUF_IS_PTX_NO
+	LD	DE,BUFMAG_VTX
+	LD	B,6
+	JP	BUF_CMP_DEHL
+BUF_IS_PTX_PRO:
+	LD	DE,BUFMAG_PRO
+	LD	B,11
+	JP	BUF_CMP_DEHL
+BUF_IS_PTX_NO:
+	OR	$FF
+	RET
+
+; Returns Z if MDLADDR holds a VGM header ("Vgm ", not Vortex).
+BUF_IS_VGM:
+	LD	HL,MDLADDR
+	LD	DE,BUFMAG_VGM
+	LD	B,4
+	JP	BUF_CMP_DEHL
+
+BUFMAG_PRO	.DB	"ProTracker ",0
+BUFMAG_VTX	.DB	"Vortex",0
+BUFMAG_VGM	.DB	"Vgm ",0
+
+; Clear VGM/pause latches that must not survive from prior TPA contents.
+INIT_RUNTIME_FLAGS:
+	XOR	A
+	LD	(PREVLOADBYTES),A
+	LD	(PREVLOADBYTES+1),A
+	LD	(PAUSEMD),A
+	LD	(VGMFLAG),A
+	LD	(VGMMMUMD),A
+	LD	(VGMWSTRM),A
+	LD	(VGMWINVAL),A
+	LD	(VGMRDERR),A
+	RET
+
+; TEMP diagnostic: dump key addresses, then exit to CP/M (unmissable).
+DBG_SPSAV	.DW	0
+DBG_DUMP_STATE:
+	LD	(DBG_SPSAV),SP
+	CALL	CRLF
+	LD	DE,DBGTAG
+	CALL	PRTSTR
+	LD	DE,DBGMA
+	CALL	PRTSTR
+	LD	BC,(MODADDR)
+	CALL	PRTHEXWORD
+	LD	DE,DBGLB
+	CALL	PRTSTR
+	LD	BC,(LOADBYTES)
+	CALL	PRTHEXWORD
+	LD	DE,DBGEND
+	CALL	PRTSTR
+	LD	HL,(MODADDR)
+	LD	BC,(LOADBYTES)
+	ADD	HL,BC
+	LD	B,H
+	LD	C,L
+	CALL	PRTHEXWORD
+	LD	DE,DBGSP
+	CALL	PRTSTR
+	LD	BC,(DBG_SPSAV)
+	CALL	PRTHEXWORD
+	LD	DE,DBGHE
+	CALL	PRTSTR
+	LD	A,(HEAPENDB)
+	CALL	PRTHEX
+	LD	DE,DBGPP
+	CALL	PRTSTR
+	LD	BC,(PatsPtr)
+	CALL	PRTHEXWORD
+	LD	DE,DBGP0
+	CALL	PRTSTR
+	LD	HL,(PatsPtr)
+	LD	B,6
+DBG_P0L:
+	LD	A,(HL)
+	CALL	PRTHEX
+	LD	A,' '
+	CALL	PRTCHR
+	INC	HL
+	DJNZ	DBG_P0L
+	CALL	CRLF
+	JP	0			; exit to CP/M so output cannot be erased
+DBGTAG	.DB	"DBG ",0
+DBGMA	.DB	"MA=",0
+DBGLB	.DB	" LB=",0
+DBGEND	.DB	" END=",0
+DBGSP	.DB	" SP=",0
+DBGHE	.DB	" HE=",0
+DBGPP	.DB	" PP=",0
+DBGP0	.DB	" P0=",0
+
 VGM_VALIDATE_IMAGE:
+	LD	A,(FILTYP)
+	CP	TYPVGM
+	RET	NZ			; MDLADDR/vgmdata may hold PT3/MYM; do not parse as VGM
 	CALL	VGM_MMU_SYNC_HDR
 	LD	A,(vgmdata + 04H)	; EOF offset byte 0
 	ADD	A,4					; expected size = eof + 4
@@ -1194,7 +1395,9 @@ EXIT	LD	A,(SKIPREQ)		; mute all cards immediately on track navigation
 	OR	A
 	JR	Z,EXIT0
 EXITMALL:
-	CALL	VGM_MUTE_ALL
+	LD	A,(VGMFLAG)
+	OR	A
+	CALL	NZ,VGM_MUTE_ALL
 EXIT0:
 	LD	A,(VGMFLAG)
 	OR	A
@@ -2278,13 +2481,36 @@ PRTPLAYMSG:
 	CALL	TCFG_COL_RST
 	RET
 PRTPLAYMSG0:
-	LD	A,13
-	CALL	PRTCHR
+	CALL	PRT_STAT_CLRLINE	; CR + erase (ANSI) or pad (plain), in place
 	CALL	TCFG_COL_OK
 	LD	DE,MSGPLY
 	CALL	PRTSTR
 	CALL	TCFG_COL_RST
 	RET
+
+; In-place status-line redraw for scrolling (non-UI) single-file mode.
+; ANSI configured: CR then ESC[2K erase whole line (cursor stays col 0).
+; Plain terminal: CR, overwrite with spaces, CR (clears longer prior text).
+PRT_STAT_CLRLINE:
+	LD	A,13
+	CALL	PRTCHR
+	LD	A,(cfg_term)
+	OR	A
+	JR	NZ,PRT_STAT_CLRLINE_A
+	LD	A,(cfg_flags)
+	AND	CFGF_ANSI
+	JR	Z,PRT_STAT_CLRLINE_P
+PRT_STAT_CLRLINE_A:
+	LD	DE,TCFG_SEQ_EL2
+	JP	PRTSTR
+PRT_STAT_CLRLINE_P:
+	LD	B,40
+	LD	A,' '
+PRT_STAT_CLRLINE_P1:
+	CALL	PRTCHR
+	DJNZ	PRT_STAT_CLRLINE_P1
+	LD	A,13
+	JP	PRTCHR
 
 PRTPAUSEMSG:
 	LD	A,(UI_ACTIVE)
@@ -2302,8 +2528,7 @@ PRTPAUSEMSG:
 	CALL	TCFG_COL_RST
 	RET
 PRTPAUSEMSG0:
-	LD	A,13
-	CALL	PRTCHR
+	CALL	PRT_STAT_CLRLINE
 	CALL	TCFG_COL_PRM
 	LD	DE,MSGPAUSE
 	CALL	PRTSTR
@@ -2978,6 +3203,7 @@ CMRSAV		.DB	0	; for saving original Z180 CMR value
 DMA		.DW	0	; Working DMA
 FILTYP		.DB	0	; Sound file type (TYPPT2, TYPPT3, TYPMYM)
 LOADBYTES	.DW	0	; bytes loaded (padded to 128-byte CP/M records)
+PREVLOADBYTES	.DW	0	; previous load size (playlist tail sanitize)
 ;
 ; TurboSound PT3 (packed dual-module) state
 TSFLAG		.DB	0	; non-zero if a TS footer was detected
@@ -3178,7 +3404,7 @@ MSGTERMANSI	.DB	"ANSI",0
 MSGYES		.DB	"yes",0
 MSGNO		.DB	"no",0
 MSGTUNETITLE	.DB	"Adjust visible limits until C, R, and X are just visible.",0
-MSGTUNEKEYS	.DB	"Adjustment Keys: a/d for columns, w/s for rows (or arrow keys), Esc save+quit",0
+MSGTUNEKEYS	.DB	"Adjustment Keys: a/d for columns and w/s for rows, or arrow keys, Esc save+quit",0
 MSGTUNECURR	.DB	"Current size: ",0
 MSGTUNEMAX	.DB	" (max: 150 x 50)   ",0
 TCFG_SEQ_CLR	.DB	27,'[','2','J',27,'[','H',0
@@ -4000,7 +4226,8 @@ PD_NOTE	LD (IX-12+Note),A
 	SET 0,(IX-12+Flags)
 	XOR A
 
-PD_RES	LD (PDSP_+1),SP
+PD_RES	DI
+	LD (PDSP_+1),SP
 	LD SP,IX
 	LD H,A
 	LD L,A
@@ -4011,6 +4238,7 @@ PD_RES	LD (PDSP_+1),SP
 	PUSH HL
 	PUSH HL
 PDSP_	LD SP,$3131
+	EI
 
 PD_FIN	LD A,(IX-12+NNtSkp)
 	LD (IX-12+NtSkCn),A
@@ -4222,6 +4450,9 @@ CHREGS	XOR A
 	BIT 0,(IX+Flags)
 	PUSH HL
 	JP Z,CH_EXIT
+	; SP is borrowed to read ornament/sample/note data (some in the module);
+	; block timer IRQ across the whole window to avoid module corruption.
+	DI
 	LD (CSP_+1),SP
 	LD L,(IX+OrnPtr)
 	LD H,(IX+OrnPtr+1)
@@ -4316,6 +4547,7 @@ CH_NOAC EX DE,HL
 	LD D,(IX+CrTnSl+1)
 	ADD HL,DE
 CSP_	LD SP,$3131
+	EI
 	EX (SP),HL
 	XOR A
 	OR (IX+TSlCnt)
@@ -4475,6 +4707,9 @@ PatsPtr .EQU $+1
 	ADD HL,DE
 MODADDR	.EQU $+1
 	LD DE,$1111
+	; SP is borrowed to walk module data; a timer IRQ here would push onto
+	; the module and corrupt pattern pointers. Guard with DI/EI (RomWBW only).
+	DI
 	LD (PSP_+1),SP
 	LD SP,HL
 	POP HL
@@ -4488,6 +4723,7 @@ MODADDR	.EQU $+1
 	ADD HL,DE
 	LD (AdInPtC),HL
 PSP_	LD SP,$3131
+	EI
 PL1A	LD IX,ChanA+12
 	CALL PTDECOD
 	LD (AdInPtA),BC

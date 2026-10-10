@@ -2,6 +2,14 @@
 ; VGM runtime: goVGM (validate, CPU delay setup, playback loop, sample-based key poll).
 ;
 goVGM:
+	CALL	BUF_IS_PTX
+	JP	Z,GOPT3
+	CALL	BUF_IS_VGM
+	JP	NZ,ERRNAM
+	LD	A,(FILTYP)
+	CP	TYPVGM
+	JP	NZ,ERRNAM
+goVGM0:
 	CALL	VGM_VALIDATE_IMAGE	; header / stream bounds vs loaded image
 
 	; Probe AY chip ports into TS_PORTS1/TS_PORTS2 (same as TurboSound PT3)
@@ -64,15 +72,7 @@ goVGM_meta0:
 	; Print "Playing..." (deferred hardware info already shown by PRTPLAYINFO)
 	CALL	PRTPLAYMSG		; "Playing..."
 
-	; Flush any stale key presses
-	LD	A,(ALLMD)
-	OR	A
-	JR	NZ,goVGM_flush
-	LD	A,(LOOPTRKMD)
-	OR	A
-	JR	Z,goVGM_lp
-goVGM_flush:
-	CALL	FLUSHKEYS
+	CALL	FLUSHKEYS		; clear command-line Enter before play loop
 
 ;-----------------------------------------------------------------------
 ; Main VGM playback loop
@@ -137,6 +137,9 @@ goVGM_nd_sub4410:
 	SBC	A,0
 	LD	(VGMSAMPACC),HL
 	LD	(VGMSAMPACC+2),A
+	LD	A,(ALLMD)
+	OR	A
+	JR	Z,goVGM_nd_noacc
 	LD	D,1
 	CALL	PLAYBACK_PLAY_STEP
 	LD	A,B
