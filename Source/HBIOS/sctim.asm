@@ -18,7 +18,11 @@
 ; 6	<NOT USED>		<NOT USED>
 ; 7	INT REQ ACT		INT ENABLE
 ;
-#IF (INTMODE == 1)
+#IF (INTMODE != 1)
+	.ECHO	"*** ERROR: SCTIM TIMER REQUIRES INTMODE 1!!!\n"
+	!!!	; FORCE AN ASSEMBLY ERROR
+#ENDIF
+
 ;
 	DEVECHO	"SCTIM: IO="
 	DEVECHO	SCTIMIO
@@ -94,7 +98,7 @@ SCTIM_INIT1:
 	; ENABLE THE TIMER
 	OR	$FF			; $FF TO ACCUM
 	OUT	(SCTIMIO),A		; ENABLE INTS
-	XOR				; SIGNAL SUCCESS
+	XOR	A			; SIGNAL SUCCESS
 	RET				; DONE
 ;
 ;==================================================================================================
@@ -159,8 +163,3 @@ SIZ_SCTIM	.EQU	END_SCTIM - ORG_SCTIM
 	MEMECHO	"SCTIM occupies "
 	MEMECHO	SIZ_SCTIM
 	MEMECHO	" bytes.\n"
-;
-#ELSE
-	.ECHO	"*** WARNING: SCTIM TIMER DISABLED -- ONLY INTMODE 1 SUPPORTED!!!\n"
-#ENDIF
-

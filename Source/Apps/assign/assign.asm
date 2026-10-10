@@ -41,6 +41,11 @@
 ;   2025-07-19 [D?N] Support for native USB drivers
 ;   2025-08-09 [WBW] Support for ESPSD driver
 ;   2025-11-10 [WBW] Support for SCSI driver
+;   2026-09-15 [WBW] Support <unit>.<slice> specification
+;   2026-09-24 [WBW] Include <unit>.<slice> specification in assignment list
+;   2026-09-27 [WBW] Handle numerics in device names
+;                    Improve formatting of assigned output
+;   2026-09-28 [WBW] Add column header for full assignment listing
 ;_______________________________________________________________________________
 ;
 ; ToDo:
@@ -58,6 +63,9 @@ bdos	.equ	$0005		; BDOS invocation vector
 bnksel	.equ	$FFF3		; HBIOS bank select vector
 ;
 stamp	.equ	$40		; loc of RomWBW CBIOS zero page stamp
+;
+cr	.equ	13		; carriage return char
+lf	.equ	10		; line feed char
 ;
 #include "../../ver.inc"
 #include "../../HBIOS/hbios.inc"
@@ -80,7 +88,6 @@ image	.equ	$
 	.org	$8000
 ;
 start:
-;
 	; setup stack (save old value)
 	ld	(stksav),sp	; save stack
 	ld	sp,stack	; set new stack
@@ -353,39 +360,61 @@ process1:	; handle other side of '='
 ;
 	inc	hl		; skip '='
 	call	nonblank	; skip blanks as needed
+;
+	; if there is nothing after the '=', then this is
+	; a delete operation
 	ld	de,drvdel	; assume a drive delete
 	jp	z,process4	; continue to processing
 	cp	','		; comma?
 	jp	z,process4	; continue to processing
-	call	getalpha	; gobble all alpha characters
+
+	; if the next char is numeric, this is a <unit>.<slice>
+	; style assignment
+	call	isnum		; is this a number
+	jr	z,process3	; if so, handle it
+;
+	; we now want all chars up to the a ':' which will be either
+	; a device name or a drive letter
+	ld	de,namestr	; use namestr as buffer
+	call	getan		; gobble alphanumerics into namestr
+	cp	':'		; check for mandatory trailing colon
+	jp	nz,errprm	; handle unexpected character
+	inc	hl		; bump past ':'
 	dec	b		; decrement num chars parsed
 	jr	nz,process2	; more than 1 char, handle as device name
 ;
 	; handle as drive swap
-	cp	':'		; check for mandatory trailing colon
-	jp	nz,errprm	; handle unexpected character
-	inc	hl		; skip ':'
-	ld	a,(tmpstr)	; get the drive letter
+	ld	a,(namestr)	; get the drive letter
 	sub	'A'		; make it binary
 	ld	(srcdrv),a	; assume it is a src drv and save it
 	ld	de,drvswap	; put routine to call in DE
 	jr	process4	; and continue
 ;
-process2:	; handle a device/slice assignment
-;
-	call	getnum		; get number from buffer
-	jp	c,errnum	; abort on overflow
-	cp	16		; compare to max
-	jp	nc,errnum	; abort if too high
-	ld	(unit),a	; save it as unit num
-	ld	a,(hl)		; get terminating char
-	cp	':'		; check for mandatory colon
-	jp	nz,errprm	; handle unexpected character
-	inc	hl		; skip past colon
+process2:	; handle a <devicename>:<slice> assignment
+	push	hl		; save working string pointer
+	call	findunit	; match namestr to hbios units (sets unit)
+	pop	hl		; recover working string pointer
+	jp	nz,errdev	; handle invalid device
 	call	getnum		; get number from buffer
 	jp	c,errnum	; abort on overflow
 	ld	(slice),a	; save it as slice num
-	ld	de,drvmap	; put routine to call in DE
+	ld	de,drvmap	; setup routine to do assignment
+	jr	process4	; and continue
+;
+process3:	; handle <unit>.<slice> assignment
+	xor	a		; zero accum
+	ld	(slice),a	; set default slice to zero
+	call	getnum		; get number from buffer (unit)
+	jp	c,errnum	; abort on overflow
+	ld	(unit),a	; save as disk unit num
+	ld	a,(hl)		; get current character
+	cp	'.'		; check for separator
+	jr	nz,process4	; handle unit only spec
+	inc	hl		; skip past '.'
+	call	getnum		; get number from buffer (slice)
+	jp	c,errnum	; abort on overflow
+	ld	(slice),a	; save as slice number
+	ld	de,drvmap	; setup routine to do assignment
 	jr	process4	; and continue
 ;
 process4:	; check for terminating null or comma
@@ -410,6 +439,64 @@ process5:	; do the processing
 	call	nonblank	; and possible blanks after comma
 	ret	z		; get out if nothing more
 	jp	process0	; we have more work, loop
+;
+; Find the HBIOS disk unit number from device name
+; Enter with device name in namestr (e.g., "IDE3") w/o term colon
+; Returns matching HBIOS disk unit number in A or 0xFF if no match
+;
+findunit:
+	ld	de,namestr
+	ld	bc,BC_SYSGET_DIOCNT ; hbios func: sysget subfunc: diocnt
+	rst	08		; call hbios, E := device count
+	ld	b,e		; use device count for loop count
+	ld	c,0		; use C for device index
+findunit1:
+	; get device name and device unit
+	push	bc		; preserve loop control
+	ld	b,BF_DIODEVICE	; get device info, D=device id, E=device unit
+	rst	08		; do it
+	ld	a,e		; device unit to A
+	push	af		; save for later
+;
+	; build device name in tempstr
+	ld	hl,devtbl	; start of device name table
+	ld	a,d		; device index
+	add	a,a		; word offset
+	call	addhl		; lookup, hl is adr of string ptr
+	ld	a,(hl)		; dereference
+	inc	hl
+	ld	h,(hl)		; msb
+	ld	l,a		; lsb
+;
+	; Copy device name to tmpstr
+	ld	de,tmpstr	; destination is tempstr
+	call	strcpy		; copy to tmpstr
+;
+	pop	af		; recover device unit
+	push	de		; string pointer
+	pop	iy		; to IY
+	ld	h,0		; msb always 0
+	ld	l,a		; device unit to L
+	call	bindec		; convert to decimal
+	xor	a		; null
+	ld	(iy),a		; terminate string
+;
+	; Compare to requested device name
+	ld	hl,namestr	; Compare namestr
+	ld	de,tmpstr	; ... to tmpstr
+	call	strcmp		; ... using strcmp
+	pop	bc		; recover loop control
+	jr	z,findunit2	; if matched, all done
+	inc	c		; next HBIOS disk unit
+	djnz	findunit1	; loop through all disk units
+	or	$ff		; no more, signal error
+	ret			; done
+;
+findunit2:
+	ld	a,c		; unit to A
+	ld	(unit),a	; save in unit var
+	xor	a		; signal success
+	ret			; done
 ;
 ; Handle special options
 ;
@@ -460,6 +547,9 @@ devlist:
 	or	a		; set flags
 	jr	nz,devlstu	; do UNA mode dev list
 ;
+	ld	de,msglst	; header
+	call	prtstr		; print it
+;
 	ld	bc,BC_SYSGET_DIOCNT ; hbios func: sysget subfunc: diocnt
 	rst	08		; call hbios, E := device count
 	ld	b,e		; use device count for loop count
@@ -469,6 +559,12 @@ devlist1:
 	ld	de,indent	; indent
 	call	prtstr		; ... to look nice
 	push	bc		; preserve loop control
+	ld	de,msgdisk	; prefix
+	call	prtstr		; print it
+	ld	a,c		; device to A
+	call	prtdecb		; print disk unit number
+	ld	b,15		; pad to col 15
+	call	pad		; do it
 	ld	a,c		; device to A
 	call	prtdev		; print device mnemonic
 	ld	a,':'		; colon for device/unit format
@@ -523,6 +619,7 @@ bootdr:
 	cp	'='
 	inc	hl
 	call	nonblank	; skip ws
+	ld	de,tmpstr	; location to save chars
 	call	getalpha	; options string into (tmpstr)
 ;
 	; defaulting loop for normal disk boot starting at A:
@@ -1563,66 +1660,11 @@ drvmap:
 	or	a		; set flags
 	jr	nz,drvmapu	; do UNA mode drvmap
 ;
-		; determine device code by scanning for string
-	ld	b,devcnt	; number of entries in devtbl
-	ld	c,0		; c is used to track table entry num
-	ld	de,tmpstr	; de points to specified device name
-	ld	hl,devtbl	; hl points to first entry of devtbl
-;
-drvmap1:	; loop through device table looking for a match
-	push	hl		; save device table entry pointer
-	ld	a,(hl)		; dereference HL
-	inc	hl		;   ... to point to
-	ld	h,(hl)		;   ... string
-	ld	l,a		;   ... in device table
-	push	de		; save string pointer
-	push	bc		; save loop control stuff
-	call	strcmp		; compare strings
-	pop	bc		; restore loop control stuff
-	pop	de		; restore de
-	pop	hl		; restore table entry pointer
-	jr	z,drvmap2	; match, continue
-	inc	hl		; bump to next
-	inc	hl		; device table pointer
-	inc	c		; keep track of table entry num
-	djnz	drvmap1		; and loop
-	jp	errdev
-;
-drvmap2:
-	; convert index to device type id
-	ld	a,c		; index to accum
-	ld	(device),a	; save as device id
-;
-	; loop thru hbios units looking for device type/unit match
-	ld	bc,BC_SYSGET_DIOCNT ; hbios func: sysget subfunc: diocnt
-	rst	08		; call hbios, E := device count
-	ld	b,e		; use device count for loop count
-	ld	c,0		; use C for device index
-drvmap3:
-	push	bc		; preserve loop control
-	ld	b,BF_DIODEVICE	; hbios func: diodevice
-	rst	08		; call hbios, D := device, E := unit
-	pop	bc		; restore loop control
-	ld	a,(device)
-	cp	d
-	jr	nz,drvmap4
-	ld	a,(unit)
-	cp	e
-	jr	z,drvmap5	; match, continue, C = BIOS unit
-drvmap4:
-	; continue looping
-	inc	c
-	djnz	drvmap3
-	jp	errdev		; invalid device specified
-;
-drvmap5:
 	; check for valid unit (supported by BIOS)
-	push	bc		; save unit
-	ld	a,c		; unit to A
+	ld	a,(unit)	; unit to A
 	call	chkdev		; check validity
-	pop	bc		; restore unit
 	ret	nz		; bail out on error
-
+;
 	; resolve the CBIOS DPH table entry
 	ld	a,(dstdrv)	; dest drv num to A
 	call	chkdrv		; valid drive?
@@ -1634,9 +1676,10 @@ drvmap5:
 	ld	(dstptr),hl	; save it
 ;
 	; shove updated unit/slice into the entry
-	ld	(hl),c		; save unit byte
+	ld	a,(unit)	; unit to A
+	ld	(hl),a		; save unit
 	inc	hl		; bump to next byte
-	ld	a,(slice)
+	ld	a,(slice)	; slice to A
 	ld	(hl),a		; save slice
 ;
 	; finish up
@@ -1726,15 +1769,12 @@ drvmapu1:
 ; Display all active drive letter assignments
 ;
 showall:
+	ld	de,msgasn	; point to assignment col headings
+	call	prtstr		; print it
+;
 	ld	b,16		; 16 drives possible
 	ld	c,0		; map index (drive letter)
-;
-;	ld	a,b		; load count
-;	or	$FF		; signal no action
-;	ret	z		; bail out if zero
-;
 showall1:	; loop
-;	ld	a,c		;
 	push	bc		; save loop control
 	call	showass
 	pop	bc		; restore loop control
@@ -1749,7 +1789,6 @@ showall1:	; loop
 showass:
 ;
 	; setup HL to point to desired entry in table
-;	ld	c,a		; save incoming drive in C
 	ld	hl,mapwrk	; HL = address of drive map
 	ld	a,c
 	rlca
@@ -1764,8 +1803,7 @@ showass:
 ; Display drive letter assignment for the drive num in A
 ;
 showone:
-;
-	push	af		; save the incoming drive num
+	ld	(drvnum),a	; save the invoming drive num
 ;
 	call	crlf		; formatting
 ;
@@ -1773,15 +1811,14 @@ showone:
 	call	prtstr		; ... to look nice
 ;
 	; setup HL to point to desired entry in table
-	pop	af
-	push	af
+	ld	a,(drvnum)	; recover the incoming drive num
 	ld	hl,mapwrk	; HL = address of drive map
 	rlca
 	rlca
 	call	addhl		; HL = address of drive map table entry
-	pop	af
 ;
 	; render the drive letter based on table index
+	ld	a,(drvnum)	; recover the incoming drive num
 	add	a,'A'		; convert to alpha
 	call	prtchr		; print it
 	ld	a,':'		; conventional color after drive letter
@@ -1789,7 +1826,7 @@ showone:
 	ld	a,'='		; use '=' to represent assignment
 	call 	prtchr		; print it
 ;
-	; render the map entry
+	; render the map entry in mnemonic:slice format
 	ld	a,(hl)		; load unit
 	cp	$FF		; empty?
 	ret	z		; yes, bypass
@@ -1800,6 +1837,28 @@ showone:
 	pop	hl		; recover HL
 	inc	hl		; point to slice num
 	ld	a,(hl)		; load slice num
+	call	prtdecb		; print it
+;
+	; render the map entry in unit.slice format
+	ld	b,20		; move to col 20
+	call	pad		; do it
+;
+	; render the drive letter based on table index
+	ld	a,(drvnum)	; recover the incoming drive num
+	add	a,'A'		; convert to alpha
+	call	prtchr		; print it
+	ld	a,':'		; conventional color after drive letter
+	call	prtchr		; print it
+	ld	a,'='		; use '=' to represent assignment
+	call 	prtchr		; print it
+;
+	; render the map entry in unit.slice format
+	dec	hl		; point to unit number
+	ld	a,(hl)		; get unit number
+	call	prtdecb		; print it
+	call	prtdot		; separator
+	inc	hl		; point to slice number
+	ld	a,(hl)		; get slice number
 	call	prtdecb		; print it
 ;
 	ret
@@ -1910,7 +1969,6 @@ chkdrv:
 ; Check that the unit value in A is valid
 ; according to active BIOS support.
 ;
-;
 chkdev:		; HBIOS variant
 	push	af		; save incoming unit
 	ld	bc,BC_SYSGET_DIOCNT ; hbios func: sysget subfunc: diocnt
@@ -1964,15 +2022,34 @@ chkdevu1:
 ; Print character in A without destroying any registers
 ;
 prtchr:
+	push	af		; save registers
 	push	bc		; save registers
 	push	de
 	push	hl
+;
+	; print the character via BDOS
+	push	af
 	ld	e,a		; character to print in E
 	ld	c,$02		; BDOS function to output a character
 	call	bdos		; do it
+	pop	af
+;
+	; update current screen column
+	ld	hl,col		; hl points to col value
+	cp	cr		; carriage return?
+	jr	z,prtchr1	; handle cr
+	cp	lf		; linefeed?
+	jr	z,prtchr2	; ignore linefeed
+	inc	(hl)		; else inc col
+	jr	prtchr2		; and continue
+prtchr1:
+	xor	a
+	ld	(hl),a
+prtchr2:
 	pop	hl		; restore registers
 	pop	de
 	pop	bc
+	pop	af
 	ret
 ;
 prtdot:
@@ -1984,7 +2061,7 @@ prtdot:
 	pop	af		; restore af
 	ret			; done
 ;
-; Print a zero terminated string at (HL) without destroying any registers
+; Print a zero terminated string at (DE) without destroying any registers
 ;
 prtstr:
 	push	de
@@ -1999,6 +2076,23 @@ prtstr1:
 ;
 prtstr2:
 	pop	de		; restore registers
+	ret
+;
+; Pad output with blanks to column specified in B
+;
+pad:
+	push	af
+	push	bc
+pad1:
+	ld	a,(col)
+	cp	b
+	jr	nc,pad2
+	ld	a,' '
+	call	prtchr
+	jr	pad1
+pad2:
+	pop	bc
+	pop	af
 	ret
 ;
 ; Print the value in A in hex without destroying any registers
@@ -2099,6 +2193,35 @@ prtdec2:
 	call	prtchr
 	ret
 ;
+; Convert binary number in HL to a decimal string
+; stored at IY
+;
+bindec:
+	ld	e,'0'
+	ld	bc,-10000
+	call	bindec1
+	ld	bc,-1000
+	call	bindec1
+	ld	bc,-100
+	call	bindec1
+	ld	c,-10
+	call	bindec1
+	ld	e,0
+	ld	c,-1
+bindec1:
+	ld	a,'0' - 1
+bindec2:
+	inc	a
+	add	hl,bc
+	jr	c,bindec2
+	sbc	hl,bc
+	cp	e
+	ret	z
+	ld	e,0
+	ld	(iy),a
+	inc	iy
+	ret
+;
 ; Print a byte buffer in hex pointed to by DE
 ; Register A has size of buffer
 ;
@@ -2167,12 +2290,11 @@ delim1:
 	ret			; return
 ;
 ; Get alpha chars and save in tmpstr
+; Enter with DE pointing to buffer
 ; return with terminating char in A and flags set
 ; return with num chars in B
 ;
 getalpha:
-;
-	ld	de,tmpstr	; location to save chars
 	ld	b,0		; length counter
 ;
 getalpha1:
@@ -2198,6 +2320,60 @@ getalpha2:	; non-alpha, clean up and return
 	or	a		; set flags
 	ret			; and done
 ;
+; Get a string of alphanumeric characters
+; Enter with DE pointing to buffer
+; return with terminating char in A and flags set
+; return with num chars in B
+;
+getan:
+	ld	b,0		; length counter
+;
+getan1:
+	ld	a,(hl)		; get active char
+	cp	':'		; terminating ':'
+	jr	z,getan3	; if so, all done
+	cp	'0'		; start of numbers?
+	jr	c,getan3	; if < '0', bail out
+	cp	'9' + 1		; end of numbers?
+	jr	c, getan2	; if <= '9', gobble char and loop
+	cp	'A'		; start of alpha?
+	jr	c,getan3	; if < 'A', bail out
+	cp	'Z' + 1		; end of alpha?
+	jr	c,getan2	; if <= 'Z', gobble char and loop
+	jr	getan3	; else bail out
+getan2:
+	; handle name char
+	inc	hl		; increment buffer ptr
+	ld	(de),a		; save it
+	inc	de		; inc string pointer
+	inc	b		; inc string length
+	ld	a,b		; put length in A
+	cp	8		; max length?
+	jr	z,getan3	; if max, get out
+	jr	getan1	; and loop
+;
+getan3:	; clean up and return
+	xor	a		; clear accum
+	ld	(de),a		; terminate string
+	ld	a,(hl)		; recover terminating char
+	or	a		; set flags
+	ret			; and done
+;
+; Check if current character pointed to by (hl) is numeric
+; Return Z if so, else NZ
+;
+isnum:
+	ld	a,(hl)		; get the active char
+	cp	'0'		; compare to ascii '0'
+	jr	c,isnum2	; abort if below
+	cp	'9' + 1		; compare to ascii '9'
+	jr	nc,isnum2	; abort if above
+	xor	a		; signal success
+	ret
+isnum2:
+	or	$FF		; signal error
+	ret
+;
 ; Get numeric chars and convert to number returned in A
 ; Carry flag set on overflow
 ;
@@ -2208,7 +2384,7 @@ getnum1:
 	cp	'0'		; compare to ascii '0'
 	jr	c,getnum2	; abort if below
 	cp	'9' + 1		; compare to ascii '9'
-	jr	nc,getnum2	; abort if above\
+	jr	nc,getnum2	; abort if above
 ;
 	; valid digit, add new digit to C
 	ld	a,c		; get working value to A
@@ -2235,11 +2411,21 @@ getnum2:	; return result
 	or	a		; with flags set, CF is cleared
 	ret
 ;
+; Copy a null terminated string from (HL) to (DE)
+;
+strcpy:
+	ld	a,(hl)
+	ld	(de),a
+	cp	0
+	ret	z
+	inc	hl
+	inc	de
+	jr	strcpy
+;
 ; Compare null terminated strings at HL & DE
 ; If equal return with Z set, else NZ
 ;
 strcmp:
-;
 	ld	a,(de)		; get current source char
 	cp	(hl)		; compare to current dest char
 	ret	nz		; compare failed, return with NZ
@@ -2394,15 +2580,19 @@ drives:
 dstdrv	.db	0		; destination drive
 srcdrv	.db	0		; source drive
 device	.db	0		; source device
+devunit	.db	0		; device relative unit number
 ; note (unit and slice) need to be kept ordered since they are used
 ; in code forming a temp table entry (comparison purposes). See bootadd:
 unit	.db	0		; source unit
 slice	.db	0		; source slice
+drvnum	.db	0		; temp storage for current drive number
 ;
 atrmask	.db	0		; device attributes mask before compare
 atrcomp	.db	0		; device attributes compare to
 slicec	.db	1		; number of slices to assign for each volume
 slicmem	.dw	280		; memory to allocate to next slice assigment
+;
+col	.db	0		; current screen column
 ;
 unamod	.db	0		; $FF indicates UNA UBIOS active
 modcnt	.db	0		; count of drive map modifications
@@ -2411,6 +2601,7 @@ srcptr	.dw	0		; source pointer for copy
 dstptr	.dw	0		; destination pointer for copy
 tmpent	.fill	4,0		; space to save a table entry
 tmpstr	.fill	17,0		; temporary string of up to 16 chars, zero term
+namestr	.fill	17,0		; storage for a device name string of up to 16 chars, zero term
 ;
 heaptop	.dw	0		; current address of top of heap memory
 heaplim	.dw	0		; heap limit address
@@ -2431,7 +2622,7 @@ devtbl:				; device table
 	.dw	dev04, dev05, dev06, dev07
 	.dw	dev08, dev09, dev10, dev11
 	.dw	dev12, dev13, dev14, dev15
-	.dw	dev16, dev17, dev18
+	.dw	dev16, dev17, dev18, dev19
 ;
 devunk	.db	"?",0
 dev00	.db	"MD",0
@@ -2452,9 +2643,10 @@ dev14	.db	"CHSD",0
 dev15	.db	"USB",0
 dev16	.db	"ESPSD",0
 dev17	.db	"SCSI",0
-dev18	.equ	devunk
+dev18	.db	"I2CEE",0
+dev19	.equ	devunk
 ;
-devcnt	.equ	19		; 19 device types defined
+devcnt	.equ	20		; 19 device types defined
 ;
 udevram		.db	"RAM",0
 udevrom		.db	"ROM",0
@@ -2472,30 +2664,32 @@ stack	.equ	$		; stack top
 ; Messages
 ;
 indent	.db	"   ",0
-msgban1	.db	"ASSIGN v2.3 for RomWBW CP/M ",0
+msgban1	.db	"ASSIGN v2.7 for RomWBW CP/M ",0
 msg22	.db	"2.2",0
 msg3	.db	"3",0
-msbban2	.db	",10-Dec-2025",0
+msbban2	.db	",28-Sep-2026",0
 msghb	.db	" (HBIOS Mode)",0
 msgub	.db	" (UBIOS Mode)",0
-msgban3	.db	"Copyright 2025, Wayne Warthen, GNU GPL v3",0
-msguse	.db	"Usage: ASSIGN D:[=[{D:|<device>[<unitnum>]:[<slicenum>]}]][,...]",13,10
+msgban3	.db	"Copyright 2026, Wayne Warthen, GNU GPL v3",0
+msguse	.db	"Usage: ASSIGN D:[=[{D:|<device>[<unitnum>]:[<slicenum>]|<unit>.<slice>]}][,...]",13,10
 	.db	"  ex. ASSIGN           (display all active assignments)",13,10
 	.db	"      ASSIGN /?        (display version and usage)",13,10
-	.db	"      ASSIGN /L        (display all possible devices)",13,10
+	.db	"      ASSIGN /L        (display all known devices)",13,10
 	.db	"      ASSIGN /B=OPTS   (perform assignment based on options)",13,10
 	.db	"      ASSIGN C:        (display assignment for C:)",13,10
 	.db	"      ASSIGN C:=D:     (swaps C: and D:)",13,10
 	.db	"      ASSIGN C:=FD0:   (assign C: to floppy unit 0)",13,10
-	.db	"      ASSIGN C:=IDE0:1 (assign C: to IDE unit0, slice 1)",13,10
+	.db	"      ASSIGN C:=IDE0:1 (assign C: to IDE unit 0, slice 1)",13,10
+	.db	"      ASSIGN C:=3.1    (assign C: to HBIOS disk unit 3, slice 1)",13,10
 	.db	"      ASSIGN C:=       (unassign C:)",0
 msgprm	.db	"Parameter error (ASSIGN /? for usage)",0
 msginv	.db	"Unexpected CBIOS (signature missing)",0
 msgver	.db	"Unexpected CBIOS version",0
 msgdrv1	.db	"Invalid drive letter (",0
 msgdrv2	.db	":)",0
+msgdisk	.db	"Disk ",0
 msgswp	.db	"Invalid drive swap request",0
-msgdev	.db	"Invalid device name (ASSIGN /L for device list)",0
+msgdev	.db	"Invalid device name or unit number (ASSIGN /L for device list)",0
 msgslc	.db	"Specified device does not support slices",0
 msgnum	.db	"Unit or slice number invalid",0
 msgovf	.db	"Disk buffer exceeded in CBIOS, aborted",0
@@ -2504,6 +2698,10 @@ msgint	.db	"Multiple drive letters reference one filesystem, aborting!",0
 msgnoa	.db	"Drive A: is unassigned, aborting!",0
 msgdos	.db	"DOS error, return code=0x",0
 msgmem	.db	" Disk Buffer Bytes Free",0
+msgasn	.db	"\r\n   Device:Slice     Unit.Slice"
+	.db	"\r\n   ---------------  ----------",0
+msglst	.db	"\r\n   Unit        Device"
+	.db	"\r\n   ----------  ------------",0
 ;
 modsize	.equ	$ - start
 ;

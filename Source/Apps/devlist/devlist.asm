@@ -1,5 +1,5 @@
 ;==============================================================================
-; DEVIVE INVENTORY - Inventory Device
+; DEVICE LIST - HBIOS Device Listing
 ; Version  December-2025
 ;==============================================================================
 ;
@@ -14,9 +14,29 @@
 ;   2025-12-10 [WBW] Add support for SCSI driver
 ;______________________________________________________________________________
 ;
+;
+BDOS		.EQU	$0005		; BDOS invocation vector
+;
+#ifdef CPM
+;
+FALSE		.EQU	0
+TRUE		.EQU	~FALSE
+;
+#DEFINE	PRTS(S)	CALL PRTSTRD \ .TEXT S	; PRINT STRING S TO CONSOLE - PRTS("HELLO")
+;
+CPU_EZ80	.EQU	FALSE
+CPUFAM		.EQU	TRUE
+;
+#endif
+;
 ; Include Files
 ;
-#include "std.asm"	; standard RomWBW constants
+#IFDEF CPM
+#include "../../HBIOS/layout.inc"	; HBIOS ROM Layout
+#include "../../HBIOS/hbios.inc"	; Standard HBIOS constants
+#ELSE
+#include "std.asm"			; Standard HBIOS constants
+#ENDIF
 ;
 ;*****************************************************************************
 ;
@@ -24,7 +44,11 @@
 ; MUST "ORG" AT THIS ADDRESS.  TO CHANGE THE LOAD LOCATION OF THIS
 ; CODE, YOU CAN UPDATE DEV_LOC IN LAYOUT.INC
 ;
+#IFDEF CPM
+	.ORG	$100
+#ELSE
 	.ORG	DEV_LOC
+#ENDIF
 ;
 ;*****************************************************************************
 ; INIT CODE
@@ -58,7 +82,7 @@ PRTSUM:
 	RET
 ;
 ;*****************************************************************************
-; Supporting Code Stars Here
+; Supporting Code Starts Here
 ;*****************************************************************************
 ;
 PRT_ALLD:
@@ -137,6 +161,8 @@ PS_PRTDC:
 	CP	5			; RAM DISK?
 	JR	Z,PS_PRTDC1		; PRINT CAPACITY IN KB
 	CP	7			; FLASH DISK?
+	JR	Z,PS_PRTDC1		; PRINT CAPACITY IN KB
+	CP	13			; EEPROM?
 	JR	Z,PS_PRTDC1		; PRINT CAPACITY IN KB
 ;
 	; PRINT HARD DISK STORAGE SIZE IN MB
@@ -315,13 +341,15 @@ PS_PRTSC1:
 	PRTS("Video $")			; FORMATTING
 	AND	$0F			; ISOLATE VIDEO UNIT NUM
 	CALL	PRTDECB			; PRINT IT
+#ifdef HBIOS
 	CALL	PC_COMMA
-#IF (VDAEMU == EMUTYP_TTY)
+  #IF (VDAEMU == EMUTYP_TTY)
 	PRTS("TTY$")
-#ENDIF
-#IF (VDAEMU == EMUTYP_ANSI)
+   #ENDIF
+  #IF (VDAEMU == EMUTYP_ANSI)
 	PRTS("ANSI$")
-#ENDIF
+  #ENDIF
+#endif
 	RET
 ;
 PS_PRTSC2:
@@ -501,15 +529,43 @@ PS_PAD1:
 ; TODO Ideally we wouldnt import all these here, as they take up quite a
 ; bit of space. Util.asm needs to be broken up, or copy required code here
 ;
-#include	"util.asm"
-#include 	"decode.asm"
-#include	"bcd.asm"
+#IFDEF CPM
+#include "../../HBIOS/util.asm"
+#include "../../HBIOS/decode.asm"
+#include "../../HBIOS/bcd.asm"
+#ELSE
+#include "util.asm"
+#include "decode.asm"
+#include "bcd.asm"
+#ENDIF
 ;
 ;=======================================================================
 ; Console character I/O helper routines (registers preserved)
 ;=======================================================================
 ;
-#if (BIOS == BIOS_WBW)
+#ifdef CPM
+COUT:
+	; Save all incoming registers
+	push	af
+	push	bc
+	push	de
+	push	hl
+;
+	; Print the character via BDOS
+	push	af
+	ld	e,a		; character to print in E
+	ld	c,$02		; BDOS function to output a character
+	call	BDOS		; do it
+	pop	af
+;
+	; Restore all registers
+	pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+#else
+  #if (BIOS == BIOS_WBW)
 ;
 ; Output character from A
 ;
@@ -533,9 +589,9 @@ COUT:
 	pop	af
 	ret
 ;
-#endif
+  #endif
 ;
-#if (BIOS == BIOS_UNA)
+  #if (BIOS == BIOS_UNA)
 ;
 ; Output character from A
 ;
@@ -558,6 +614,7 @@ COUT:
 	pop	af
 	ret
 ;
+  #endif
 #endif
 ;
 ;===============================================================================
@@ -586,6 +643,7 @@ PS_DDCHSD	.TEXT	"CHSD$"
 PS_DDCHNATUSB	.TEXT	"USB$"
 PS_DDESPSD	.TEXT	"ESPSD$"
 PS_DDSCSI	.TEXT	"SCSI$"
+PS_DDI2CEE	.TEXT	"I2CEE$"
 ;
 ; DISK TYPE STRINGS
 ;
@@ -603,6 +661,7 @@ PS_DTCRT	.TEXT	"Cartridge$"
 PS_DTOUSBSCI	.TEXT	"SCSI$"
 PS_DTOUSBUFI	.TEXT	"UFI$"
 PS_DTOTHER	.TEXT	"???$"
+PS_DTEE		.TEXT	"EEPROM$"
 
 ;
 ; FLOPPY ATTRIBUTE STRINGS
@@ -698,22 +757,22 @@ HB_BCDTMP	.FILL	5,0		; BCD NUMBER STORAGE (TEMP)
 ;
 ;===============================================================================
 ;
+#IFDEF HBIOS
 ; IT IS CRITICAL THAT THE FINAL BINARY BE EXACTLY DEV_SIZ BYTES.
 ; THIS GENERATES FILLER AS NEEDED.  IT WILL ALSO FORCE AN ASSEMBLY
 ; ERROR IF THE SIZE EXCEEDS THE SPACE ALLOCATED.
 ;
 SLACK	.EQU	(DEV_END - $)
 ;
-#IF (SLACK < 0)
-	.ECHO	"*** INVENTORY SLICE IS TOO BIG!!!\n"
+  #IF (SLACK < 0)
+	.ECHO	"*** DEVICE LIST SIZE IS TOO BIG!!!\n"
 	!!!	; FORCE AN ASSEMBLY ERROR
-#ENDIF
+  #ENDIF
 ;
 	.FILL	SLACK,$00
-	.ECHO	"INVNTDEV Device Inventory space remaining: "
+	.ECHO	"Device List space remaining: "
 	.ECHO	SLACK
 	.ECHO	" bytes.\n"
+#ENDIF
 ;
-;===============================================================================
-;
-.END
+	.END

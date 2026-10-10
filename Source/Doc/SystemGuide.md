@@ -1082,26 +1082,27 @@ All character units are assigned a Device Type ID which indicates
 the specific hardware device driver that handles the unit.  The table
 below enumerates their values.
 
-| **Device Type** | **ID** | **Description**                          | **Driver** |
-|-----------------|-------:|------------------------------------------|------------|
-| DIODEV_MD       | 0x00   | Memory Disk                              | md.asm     |
-| DIODEV_FD       | 0x01   | Floppy Disk                              | fd.asm     |
-| DIODEV_RF       | 0x02   | RAM Floppy                               | rf.asm     |
-| DIODEV_IDE      | 0x03   | IDE Disk                                 | ide.asm    |
-| DIODEV_ATAPI    | 0x04   | ATAPI Disk (not implemented)             |            |
-| DIODEV_PPIDE    | 0x05   | PPIDE Disk                               | ppide.asm  |
-| DIODEV_SD       | 0x06   | SD Card                                  | sd.asm     |
-| DIODEV_PRPSD    | 0x07   | PropIO SD Card                           | prp.asm    |
-| DIODEV_PPPSD    | 0x08   | ParPortProp SD Card                      | ppp.asm    |
-| DIODEV_HDSK     | 0x09   | SIMH HDSK Disk                           | hdsk.asm   |
-| DIODEV_PPA      | 0x0A   | Iomega PPA Disk                          | ppa.asm    |
-| DIODEV_IMM      | 0x0B   | Iomega IMM Disk                          | imm.asm    |
-| DIODEV_SYQ      | 0x0C   | Syquest Sparq Disk                       | syq.asm    |
-| DIODEV_CHUSB    | 0x0D   | CH375/376 USB Disk                       | ch.asm     |
-| DIODEV_CHSD     | 0x0E   | CH375/376 SD Card                        | ch.asm     |
-| DIODEV_USB      | 0x0F   | CH376 Native USB Device                  | ch376.asm  |
-| DIODEV_ESPSD    | 0x10   | S100 ESP32 SD Card                       | espsd.asm  |
-| DIODEV_SCSI     | 0x11   | 5380 SCSI Interface                      | scsi.asm   |
+| **Device Type** | **ID** | **Description**                          | **Driver**    |
+|-----------------|-------:|------------------------------------------|---------------|
+| DIODEV_MD       | 0x00   | Memory Disk                              | md.asm        |
+| DIODEV_FD       | 0x01   | Floppy Disk                              | fd.asm        |
+| DIODEV_RF       | 0x02   | RAM Floppy                               | rf.asm        |
+| DIODEV_IDE      | 0x03   | IDE Disk                                 | ide.asm       |
+| DIODEV_ATAPI    | 0x04   | ATAPI Disk (not implemented)             |               |
+| DIODEV_PPIDE    | 0x05   | PPIDE Disk                               | ppide.asm     |
+| DIODEV_SD       | 0x06   | SD Card                                  | sd.asm        |
+| DIODEV_PRPSD    | 0x07   | PropIO SD Card                           | prp.asm       |
+| DIODEV_PPPSD    | 0x08   | ParPortProp SD Card                      | ppp.asm       |
+| DIODEV_HDSK     | 0x09   | SIMH HDSK Disk                           | hdsk.asm      |
+| DIODEV_PPA      | 0x0A   | Iomega PPA Disk                          | ppa.asm       |
+| DIODEV_IMM      | 0x0B   | Iomega IMM Disk                          | imm.asm       |
+| DIODEV_SYQ      | 0x0C   | Syquest Sparq Disk                       | syq.asm       |
+| DIODEV_CHUSB    | 0x0D   | CH375/376 USB Disk                       | ch.asm        |
+| DIODEV_CHSD     | 0x0E   | CH375/376 SD Card                        | ch.asm        |
+| DIODEV_USB      | 0x0F   | CH376 Native USB Device                  | ch376.asm     |
+| DIODEV_ESPSD    | 0x10   | S100 ESP32 SD Card                       | espsd.asm     |
+| DIODEV_SCSI     | 0x11   | 5380 SCSI Interface                      | scsi.asm      |
+| DIODEV_I2CEEPROM| 0x12   | I2C Serial EEPROM (24CXX)                | i2ceeprom.asm |
 
 A fixed set of media types are defined. The currently defined media 
 types identifiers are listed below. Each driver will support one or
@@ -1334,7 +1335,8 @@ The non-Floppy specific bits are:
 | 4        | LBA Capable                                      |
 | 3-0      | Media Type: 0=Hard Disk, 1=CF, 2=SD, 3=USB,      |
 |          |   4=ROM, 5=RAM, 6=FLASH, 7=RAMF, 8=CD-ROM,       |
-|          |   9=Cartridge                                    |
+|          |   9=Cartridge, 10=SCSI, 11=UFI, 12=Other,        |
+|          |   13=EEPROM                                      |
 
 Device Type (D) indicates the specific hardware driver that handles the 
 specified Disk Unit (C).  Values are listed at the start of this 
@@ -2495,6 +2497,295 @@ approximately B5.
 
 `\clearpage`{=latex}
 
+## Inter-Integrated Circuit (I2C)
+
+I2C functions provide direct, low-level access to a single shared I2C
+bus master for CP/M-level programs and other HBIOS drivers that need
+to talk to I2C peripherals (RTCs, GPIO expanders, sensors, LCD
+backpacks, etc.) without duplicating bus-master protocol code per
+client program.
+
+Unlike the other function classes, there is only ever one logical I2C
+bus, so the I2C Unit number (C) is always 0. Three mutually-exclusive
+backend drivers exist and are selected at build time, at most one is
+ever present on a given ROM image.
+Future plans may include multiple bus masters and multiple busses per
+bus master.
+
+| **Device Type** | **ID** | **Description**                            | **Driver** |
+|-----------------|--------|--------------------------------------------|------------|
+| (PCF8584)       | 1      | NXP PCF8584 I2C bus controller             | i2cpcf.asm |
+| (bitbang)       | 2      | Software bit-banged I2C                    | i2cbit.asm |
+|                 |        | (SC137/SC608/SC704 I2C bus master modules) |            |
+| (eZ80)          | 3      | eZ80 on-chip I2C controller, 100kHz        | i2cez80.asm|
+
+All backends expose the exact same function set below, so a program
+written against these functions runs unmodified regardless of which
+physical bus-master chip is actually installed, confirmed in
+practice by swapping the physical board and re-running an unmodified
+binary. Use Function 0x60 (I2CDEVICE) to identify which backend, if
+any, is actually present before use.
+
+**These functions do not return a standard HBIOS result code.** Status
+(A) is I2C-protocol-specific instead, and **the two backends do not
+support the same set of status codes**. The bit-bang backend has no
+internal polling or timeout logic at all, so several codes that are
+real on the PCF8584 backend can never occur on the bit-bang backend:
+
+#### Status codes -- bit-bang backend (i2cbit.asm)
+
+| **Function**  | **0**         | **1** | **ERR_NOHW** |
+|---------------|---------------|-------|--------------|
+| 0x60 DEVICE   | OK, HW OK     | --    | HW failed    |
+| 0x61 START    | OK            | NAK   | HW failed    |
+| 0x62 REPSTART | OK            | NAK   | --           |
+| 0x63 WRITE    | OK            | NAK   | --           |
+| 0x64 READ     | OK            | --    | --           |
+| 0x65 XFER     | OK            | NAK   | --           |
+| 0x66 BUSBUSY  | free (always) | --    | HW failed    |
+| 0x67 STOP     | OK (always)   | --    | --           |
+
+DEVICE, START, and BUSBUSY check whether the bus-master's own init
+self-test failed; REPSTART/WRITE/XFER call straight into the backend
+with no such check, so a dead bus-master doesn't pre-empt them here,
+their transaction just fails some other way (typically NAK) instead.
+BUSBUSY gets its own check (rather than relying on a preceding START to
+have caught it) because, unlike REPSTART/WRITE/XFER, it's meant to be
+callable standalone, without an open transaction.
+
+ERR_NOHW is the standard HBIOS result code -8 ("hardware not present").
+
+Status=2 ("bus error") and Status=3 ("bus never went idle"/"busy") cannot
+occur on this backend under any circumstances: it has no ACK-wait
+timeout loop to detect a bus error, and its bus-busy check is
+hardcoded "always free" (`i2cbit.asm`'s `I2C_WAIT_FOR_BB`/`I2C_CHECK_BB`,
+a single-master bus has nothing else to contend with). BUSBUSY reads
+this same hardcoded-free check, so it always reports Status=0 on this
+backend.
+
+#### Status codes -- PCF8584 backend (i2cpcf.asm)
+
+| **Function**  | **0**       | **1** | **2**     | **3** | **ERR_NOHW** | **0xFF** |
+|---------------|-------------|-------|-----------|-------|--------------|----------|
+| 0x60 DEVICE   | OK, HW OK   | --    | --        | --    | HW failed    | --       |
+| 0x61 START    | OK          | NAK   | bus error | busy  | HW failed    | timeout  |
+| 0x62 REPSTART | OK          | NAK   | bus error | --    | --           | timeout  |
+| 0x63 WRITE    | OK          | NAK   | bus error | --    | --           | timeout  |
+| 0x64 READ     | OK          | --    | --        | --    | --           | timeout  |
+| 0x65 XFER     | OK          | NAK   | bus error | --    | --           | timeout  |
+| 0x66 BUSBUSY  | free        | --    | --        | busy  | HW failed    | --       |
+| 0x67 STOP     | OK (always) | --    | --        | --    | --           | --       |
+
+Status=2 comes from the `I2CPCF_BER` bit checked inside the shared
+ACK-wait routine (`i2cpcf.asm`'s `I2C_WAIT_FOR_ACK`), reachable from
+any function that waits for an acknowledge. Status=3 comes from a real
+polling loop with its own timeout (`I2C_WAIT_FOR_BB`), used by START
+(after waiting) and reused by BUSBUSY (`I2C_CHECK_BB`, a single
+immediate poll, no wait) for the same "bus busy" condition. ERR_NOHW
+and 0xFF (a real transaction timeout from `I2C_WAIT_FOR_ACK` /
+`I2C_WAIT_FOR_PIN`) are two distinct failure modes that happen to both
+be possible on START; only DEVICE, START, and BUSBUSY check for the
+ERR_NOHW case, so REPSTART/WRITE/XFER can only see the real-timeout
+0xFF, never ERR_NOHW.
+
+#### Status codes -- eZ80 on-chip backend (i2cez80.asm)
+
+| **Function**  | **0**         | **1** | **2**     | **4**            | **ERR_NOHW** | **0xFF** |
+|---------------|---------------|-------|-----------|------------------|--------------|----------|
+| 0x60 DEVICE   | OK, HW OK     | --    | --        | --               | HW failed    | --       |
+| 0x61 START    | OK            | NAK   | bus error | lost arbitration | HW failed    | timeout  |
+| 0x62 REPSTART | OK            | NAK   | bus error | lost arbitration | --           | timeout  |
+| 0x63 WRITE    | OK            | NAK   | bus error | lost arbitration | --           | timeout  |
+| 0x64 READ     | OK            | --    | bus error | lost arbitration | --           | timeout  |
+| 0x65 XFER     | OK            | NAK   | bus error | lost arbitration | --           | timeout  |
+| 0x66 BUSBUSY  | free (always) | --    | --        | --               | HW failed    | --       |
+| 0x67 STOP     | OK (always)   | --    | --        | --               | --           | --       |
+
+Status=4 (lost arbitration) exists only on this backend. After Status=2,
+4 or 0xFF, later steps of the same transaction return that status
+without touching the bus; STOP ends it as usual. Status=3 cannot occur:
+a bus held by another master shows up as a START timeout (0xFF).
+
+**READ (0x64) never returns Status=1 (NAK) on any backend** a
+read has no acknowledge direction to fail the way a write does; the
+master sends ACK/NAK to the slave during a read, not the reverse.
+**On bit-bang, READ also never returns ERR_NOHW** unlike START/DEVICE,
+it never checks whether the bus master itself is alive, and bit-bang's
+own wait routines can't time out; only the PCF8584 backend's real
+PIN-wait timeout (0xFF) can fail a READ.
+
+If no backend is built into this ROM image at all, no I2C function is
+ever reached. HBIOS's generic function dispatcher rejects any I2C
+call before it gets here, returning the standard HBIOS result code
+ERR_NOUNIT (-4) instead of one of the I2C-specific codes above.
+
+A transaction is always: I2CSTART or I2CREPSTART for a repeated
+start with no intervening stop to address a device, one or more
+I2CWRITE/I2CREAD/I2CXFER calls to move data, then I2CSTOP to release
+the bus. I2CWRITE, I2CREAD, and I2CXFER all assume a device has
+already been addressed by a prior I2CSTART or I2CREPSTART. None of
+them start a transaction on their own. Callers are responsible for
+issuing I2CSTOP on every path, including after an error, the driver
+does not do this automatically except where noted below.
+
+```
+HBIOS B=61 C=00 E=$A1     ; Start: address 0x50 (7-bit) << 1 | R/W=1 (read) = 0xA1
+HBIOS B=64 C=00 E=$01     ; Read one byte, last byte of the read (NACK it)
+HBIOS B=67 C=00 E=$00     ; Stop condition, single stop
+```
+
+### Implementation Notes
+
+- **Initialization:** call Function 0x60 (I2CDEVICE) before your first
+  transaction to verify a backend is present and its self-test passed.
+- **Transaction cleanup:** always issue I2CSTOP on error paths, except
+  when Status=3 (START's bus-never-idle timeout), no START was ever
+  issued in that case, so there's nothing to stop.
+- **Repeated starts:** I2CREPSTART expects the bus to already be
+  owned by a prior I2CSTART, it does not wait for bus-idle itself.
+- **Timeouts:** bit-bang has no internal timeouts at all, latency is
+  purely proportional to bit-bang loop cycles plus any slave clock
+  stretching. PCF8584's PIN/ACK/bus-busy waits (all currently 65000) are
+  loop-iteration counts, not calibrated time, so real elapsed time
+  before a timeout fires depends on the target's CPU clock speed and
+  isn't a fixed millisecond figure across all supported platforms.
+
+### Function 0x60 -- I2C Device (I2CDEVICE)
+
+| **Entry Parameters** | **Returned Values**                       |
+|----------------------|-------------------------------------------|
+| B: 0x60              | A: Status                                 |
+| C: I2C Unit (0x00)   | B: Backend (1=PCF8584, 2=bitbang, 3=eZ80) |
+|                      | HL: Device I/O Base Address               |
+
+Reports whether an I2C bus master is configured and, if so, which
+backend and base I/O port it uses. Status (A) is 0 if a backend is
+configured and its own hardware self-test at boot succeeded, ERR_NOHW
+(-8) if a backend is configured but its self-test failed. Backend (B)
+and the Device I/O Base Address (HL) are only meaningful when Status
+(A) is 0.
+
+### Function 0x61 -- I2C Start (I2CSTART)
+
+| **Entry Parameters** | **Returned Values** |
+|----------------------|---------------------|
+| B: 0x61              | A: Status           |
+| C: I2C Unit (0x00)   |                     |
+| E: Address           |                     |
+
+Issues a START condition followed by the Address (E) byte. Address
+(E) is the 7-bit device address with the read/write bit already
+merged into bit 0 (1=read, 0=write), same convention as the raw wire
+byte. Waits for the bus to go idle first (up to an internal timeout)
+before issuing the START. Status (A)=3 means that wait itself timed
+out and no START was issued, so no STOP is needed to clean up in that
+one case. Any other nonzero Status still requires the caller to issue
+I2CSTOP.
+
+### Function 0x62 -- I2C Repeated Start (I2CREPSTART)
+
+| **Entry Parameters** | **Returned Values** |
+|----------------------|---------------------|
+| B: 0x62              | A: Status           |
+| C: I2C Unit (0x00)   |                     |
+| E: Address           |                     |
+
+Issues a repeated START (no intervening STOP) plus the Address (E)
+byte, same encoding as I2CSTART. Used to reverse direction on an
+already-open transaction (e.g. write a register pointer, then repeated
+-start into a read) without releasing the bus in between. There is no
+bus-idle wait here, the caller already owns the bus from a prior
+I2CSTART.
+
+### Function 0x63 -- I2C Write (I2CWRITE)
+
+| **Entry Parameters** | **Returned Values** |
+|----------------------|---------------------|
+| B: 0x63              | A: Status           |
+| C: I2C Unit (0x00)   |                     |
+| E: Data              |                     |
+
+Writes one Data (E) byte to the already-addressed device and waits
+for its acknowledge.
+
+### Function 0x64 -- I2C Read (I2CREAD)
+
+| **Entry Parameters** | **Returned Values** |
+|----------------------|---------------------|
+| B: 0x64              | A: Status           |
+| C: I2C Unit (0x00)   | L: Data             |
+| E: Last Byte Flag    |                     |
+
+Reads one Data (L) byte from the already-addressed device. If Last
+Byte Flag (E) is nonzero, this is the final byte of the read and a
+NACK is sent to the device instead of an ACK, per the I2C protocol;
+otherwise an ACK is sent so the device continues clocking out further
+bytes on the next call. Some bus-master chips buffer one byte behind
+(the byte returned reflects the *previous* clock, not the one just
+requested); the PCF8584 backend drains this dummy byte internally,
+armed by I2CSTART/I2CREPSTART, so callers see only real data bytes
+and need no special handling.
+
+### Function 0x65 -- I2C Transfer (I2CXFER)
+
+| **Entry Parameters** | **Returned Values**  |
+|----------------------|----------------------|
+| B: 0x65              | A: Status            |
+| C: I2C Unit (0x00)   | E: Bytes Transferred |
+| D: Buffer Bank       |                      |
+| E: Byte Count        |                      |
+| HL: Buffer           |                      |
+
+Writes Byte Count (E, 0-255) bytes from Buffer (HL) to the
+already-addressed device in a single call, waiting for an acknowledge
+after each byte. A Byte Count of 0 means 256 bytes. Buffer Bank (D) is
+the bank ID (as returned by Function 0xF3 System Get Bank (SYSGETBNK))
+that Buffer (HL) actually resides in, since the caller's buffer may be
+in a different bank than HBIOS itself, the driver copies it into an
+internal staging buffer first via an inter-bank copy. Read direction is
+not yet implemented, use repeated I2CREAD calls instead.
+
+If any byte fails to acknowledge, the transfer stops at that byte and
+returns the failing Status (A). Bytes Transferred (E) counts only the
+bytes fully sent and acknowledged before the failure, e.g. byte 3 of a
+10-byte transfer failing returns E=2, not 3. E=0 alone is ambiguous;
+check Status (A): 0 means all 256 bytes (Byte Count 0) succeeded,
+nonzero means none did.
+
+### Function 0x66 -- I2C Bus Busy (I2CBUSBUSY)
+
+| **Entry Parameters** | **Returned Values**  |
+|----------------------|----------------------|
+| B: 0x66              | A: Status            |
+| C: I2C Unit (0x00)   |                      |
+
+Reports whether the bus is currently free (Status=0) or busy
+(Status=3), without waiting. Unlike I2CSTART's own bus-idle wait, this
+is a single, immediate, non-blocking poll, intended for a caller that
+wants to do other work while waiting for the bus rather than block
+inside I2CSTART. On the bit-bang backend, which has no real bus-busy
+concept on a single-master bus, this always reports free (Status=0).
+Also checks whether the bus-master's own init self-test failed
+(Status=ERR_NOHW). Unlike REPSTART/WRITE/XFER, this function is meant
+to be callable standalone without an open transaction, so it can't rely
+on a preceding I2CSTART to have already caught that case.
+
+### Function 0x67 -- I2C Stop (I2CSTOP)
+
+| **Entry Parameters** | **Returned Values**  |
+|----------------------|----------------------|
+| B: 0x67              | A: Status (always 0) |
+| C: I2C Unit (0x00)   |                      |
+| E: Double Stop       |                      |
+
+Issues a STOP condition, releasing the bus. If Double Stop (E) is
+nonzero, a second STOP is issued immediately after the first, some
+devices have been observed to need two STOPs in succession to fully
+clear their internal state after certain transactions. Most devices
+only need a single STOP (E=0).
+
+`\clearpage`{=latex}
+
 ## Extension (EXT)
 
 Helper (extension) functions that are not a core part of a BIOS.
@@ -3570,6 +3861,20 @@ Custom hardware can be configured with :
 FPLED_IO	.SET	$nn	    	; USE PORT ADDRESS nn
 FPLED_INV	.SET	FALSE		; INVERTED LED BITS
 ```
+
+#### I2C Front Panel
+
+Instead of an 8-bit I/O port, the front panel LEDs and switches can be driven
+over I2C through a single TCA9555 I/O expander. This requires a working I2C
+bus master already enabled (`I2CPCFENABLE`, `I2CBITENABLE` or `I2CEZ80ENABLE`).
+
+```
+FP_USE_I2C	.SET	TRUE		; DRIVE FRONT PANEL OVER I2C
+FP_I2CADR	.SET	$nn		; I2C ADDRESS OF THE TCA9555
+```
+
+`FPLED_IO`/`FPSW_IO` are unused in this mode; `FPLED_ENABLE`/`FPSW_ENABLE`
+still control whether the LEDs/switches are active.
 
 #### Platform Status LEDS
 
