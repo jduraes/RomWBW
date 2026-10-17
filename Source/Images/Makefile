@@ -130,17 +130,15 @@ blankhd1k:
 		dir=d_$$d/u$$u ; \
 		if [ -d $$dir ] ; then \
 			echo " " copying directory $$dir ; \
-			for i in $$dir/* ; do \
-				f=$$($(CASEFN) $$i) ; \
-				echo "    " $$f ; \
-				$(CPMCP) -f $$fmt $@ $$f $$u: ; \
-			done ; \
+			f=$$(ls -d $$dir/* | sort -f) ; \
+			echo $$f ; \
+			$(CPMCP) -f $$fmt $@ $$f $$u: ; \
 		fi ; \
 	done ; \
 	if [ -f $${dtype}_$$d.txt ] ; then \
 		echo " " copying files from $${dtype}_$$d.txt ; \
 		grep -v "^\s*[#@]" $${dtype}_$$d.txt | tr -d '\r' | while read file user ; do \
-			rf=$$($(CASEFN) $$file | sort -f) ; \
+			rf=$$(ls -d $$file | sort -f) ; \
 			echo "    " $$rf ; \
 			if [ -z "$$rf" ] ; then \
 				echo " " $$file missing ; \
