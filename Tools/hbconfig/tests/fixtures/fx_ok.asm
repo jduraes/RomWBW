@@ -1,0 +1,8 @@
+;
+; HBCONFIG TEST FIXTURE - valid config
+;
+#INCLUDE "fx_std.asm"
+;
+FOOENABLE   .SET    TRUE
+BARENABLE   .SET    TRUE
+BAZENABLE   .SET    FALSE
