@@ -49,9 +49,10 @@ bash tests/test-write.sh    ; writer fixtures + byte-identical round-trip
 
 ## Status / known limitations
 
-- M1-M5 functional.  Upstream `cfg_MASTER.asm` carries no `;@DEPENDS` /
-  `;@HELP` tags yet, so `-check` passes trivially on in-tree configs;
-  seeding the tags is the natural follow-up upstream PR.
+- M1-M5 functional.  `cfg_MASTER.asm` carries a first batch of `;@DEPENDS`
+  tags (INTMODE, MEMMGR, CTCTIMER, SCTIMENABLE, FP/LCD I2C, LCDENABLE,
+  VDAEMU_SERKBD); all 58 in-tree configs pass `-check`.  More tags are the
+  natural follow-up work.
 - Pick lists group by name prefix only; the spec's contiguous-group rule
   (`;` line separates two lists with the same prefix) is not enforced,
   and lists cap at 32 options.
