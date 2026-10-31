@@ -15,7 +15,10 @@ Hand-edited configs keep working exactly as before.
 
 ## Use
 
-Run from the `Source/HBIOS` directory (or pass a full path):
+Run from anywhere. If `Config/` is not in the current directory, hbconfig
+derives the repo from its own exe path (`<repo>/Tools/hbconfig` ->
+`<repo>/Source/HBIOS`) and uses that; relative file paths you pass
+explicitly are still tried from the current directory first.
 
 ```
 hbconfig -menu                          ; pick platform + config, then edit

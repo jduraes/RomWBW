@@ -36,6 +36,11 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <dirent.h>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <unistd.h>
+#endif
 
 #define MAXTOK   256
 
@@ -1437,6 +1442,9 @@ static void ui_help(Item *it)
 
 typedef struct { char plat[64]; char conf[160]; } CfgSel;
 
+static void mkpath(char *out, size_t outsz, const char *rel);
+static int dir_exists(const char *p);
+
 static int cmp_cfg(const void *a, const void *b)
 {
     const CfgSel *x = (const CfgSel *)a, *y = (const CfgSel *)b;
@@ -1448,12 +1456,15 @@ static int cmp_cfg(const void *a, const void *b)
    array (caller frees) or NULL with *n_out = 0 if Config/ is missing */
 static CfgSel *scan_configs(int *n_out)
 {
-    DIR *d = opendir("Config");
+    DIR *d;
     CfgSel *list = NULL;
     int n = 0, cap = 0;
     struct dirent *e;
+    char cdir[1200];
 
     *n_out = 0;
+    mkpath(cdir, sizeof(cdir), "Config");
+    d = opendir(cdir);
     if (!d) return NULL;
     while ((e = readdir(d)) != NULL) {
         const char *nm = e->d_name;
@@ -1587,11 +1598,78 @@ static int picker_choose(char *out_path, size_t outsz, const char *pre_plat)
             continue;
         }
         if (c < 0) { free(rows); free(plats); free(cfgs); return 1; }
-        snprintf(out_path, outsz, "Config/%s_%s.asm", plat, rows[c]);
+        {
+            char rel[300];
+            snprintf(rel, sizeof(rel), "Config/%s_%s.asm", plat, rows[c]);
+            mkpath(out_path, outsz, rel);
+        }
         break;
     }
     free(rows); free(plats); free(cfgs);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* config-dir location: default is ./Config (run from Source/HBIOS);  */
+/* otherwise derive the repo from the exe path: <exe>/../../Source/   */
+/* HBIOS (hbconfig lives in Tools/hbconfig).  The base is kept in     */
+/* cfg_home and prepended to "Config/..." paths; nothing is chdir'ed, */
+/* so relative paths given on the command line keep working.          */
+/* ------------------------------------------------------------------ */
+
+static char cfg_home[1024] = "";   /* "" = cwd already is Source/HBIOS */
+
+static int dir_exists(const char *p)
+{
+    DIR *d = opendir(p);
+    if (!d) return 0;
+    closedir(d);
+    return 1;
+}
+
+static int file_exists(const char *p)
+{
+    FILE *f = fopen(p, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+/* join cfg_home onto a "Config/..." relative path (no-op when unset or
+   the path is not Config-relative) */
+static void mkpath(char *out, size_t outsz, const char *rel)
+{
+    if (cfg_home[0] && strncmp(rel, "Config", 6) == 0 &&
+        (rel[6] == '/' || rel[6] == '\0'))
+        snprintf(out, outsz, "%s/%s", cfg_home, rel);
+    else
+        snprintf(out, outsz, "%s", rel);
+}
+
+static void find_config_home(const char *argv0)
+{
+    char exe[1024], cand[sizeof(cfg_home) + 64];
+    const char *slash;
+    if (dir_exists("Config")) return;   /* cwd is already Source/HBIOS */
+#ifdef _WIN32
+    DWORD n = GetModuleFileNameA(NULL, exe, sizeof(exe) - 1);
+    if (n == 0 || n >= sizeof(exe) - 1)
+#endif
+    {
+        snprintf(exe, sizeof(exe), "%s", argv0 && *argv0 ? argv0 : "");
+    }
+    slash = strrchr(exe, '/');
+#ifdef _WIN32
+    { const char *bs = strrchr(exe, '\\');
+      if (bs && (!slash || bs > slash)) slash = bs; }
+#endif
+    if (!slash || slash == exe) return;   /* invoked via PATH with no separator */
+    snprintf(cand, sizeof(cand), "%.*s/../../Source/HBIOS",
+             (int)(slash - exe), exe);
+    if (dir_exists(cand)) {
+        snprintf(cfg_home, sizeof(cfg_home), "%.*s", (int)sizeof(cfg_home) - 1, cand);
+        fprintf(stderr, "; hbconfig: using %s\n", cand);
+    }
 }
 
 /* non-interactive listing of what the picker would offer (tests, scripts) */
@@ -1811,6 +1889,7 @@ int main(int argc, char **argv)
     memset(&ctx, 0, sizeof(ctx));
 
     if (argc < 2) usage();
+    find_config_home(argv[0]);
     if (strcmp(argv[1], "-show") == 0) mode = M_SHOW;
     else if (strcmp(argv[1], "-check") == 0) mode = M_CHECK;
     else if (strcmp(argv[1], "-write") == 0) mode = M_WRITE;
@@ -1846,9 +1925,20 @@ int main(int argc, char **argv)
         if (strchr(argv[2], '/') || strchr(argv[2], '\\') ||
             strstr(argv[2], ".asm") || strstr(argv[2], ".ASM")) {
             snprintf(path, sizeof(path), "%s", argv[2]);
+            /* from a foreign cwd, a relative config path may live under
+               the derived config home; try that before giving up */
+            if (!file_exists(path) && cfg_home[0]) {
+                char alt[sizeof(path)];
+                mkpath(alt, sizeof(alt), path);
+                if (file_exists(alt)) snprintf(path, sizeof(path), "%s", alt);
+            }
         } else {
             if (argc < 4) usage();
-            snprintf(path, sizeof(path), "Config/%s_%s.asm", argv[2], argv[3]);
+            {
+                char rel[300];
+                snprintf(rel, sizeof(rel), "Config/%s_%s.asm", argv[2], argv[3]);
+                mkpath(path, sizeof(path), rel);
+            }
             a0 = 4;
         }
     }
