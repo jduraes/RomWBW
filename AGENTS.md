@@ -61,6 +61,35 @@ that starts an XMODEM receive on CP/M 3 / ZPM3:
   for both the CP/M 3 and ZPM3 slices.
 
 
+## Default Sound Unit NVRAM switch (NVSW_SNDDEF) — local custom feature
+
+A local (uncommitted, not for upstream) mod adds a boot-time-selectable
+default sound device, stored in the NVSW NVRAM block:
+
+- **Layout:** the NVSW block grows by one byte — new switch `NVSW_SNDDEF=4`
+  (hbios.inc), checksum moves to index 5 (`NVSW_DEFAULT`, `SWITCH_TAB`, and
+  the HCB shadow `CB_SW_SNDDEF` in hbios.asm all extended accordingly).
+- **Consumers:** the boot beep (hbios.asm INITSYS) and the ANSI BEL
+  (ansi.asm ANSI_BEL) read `CB_SW_SNDDEF`, clamp it to `SND_CNT`, and
+  dispatch `BF_SNDBEEP` to that unit. Both guard `SND_CNT=0` (no sound
+  hardware) by skipping the beep entirely.
+- **Setter UX:** SYSCONF gains an `SD` command (ROM app `W` at the loader
+  and the CP/M SYSCONF.COM). `SD {unit}` validates against
+  `BC_SYSGET_SNDCNT` and saves via the normal switch path; status shows in
+  the `P`rint list; `H SD` for help.
+- **TASM size trap (important):** sysconf.asm sits 208 bytes below its
+  fixed 4KB NVR app region (`NVR_SIZ=$0800` in Source/HBIOS/layout.inc).
+  If an addition overflows, the `#IF (SLACK<0)` guard prints "SYSCONF APP
+  IS TOO BIG" but TASM then **segfaults** evaluating the negative `.FILL`
+  instead of erroring — Build.cmd dies mid-stream with no error message
+  and produces no ROM (this silently killed the Zed Mini build for a whole
+  session). The SD implementation was deliberately slimmed (no device-name
+  table, short help) to fit; only ~14 bytes of slack remain. Any further
+  sysconf feature must first free space. Also note two `JR mainloop` had
+  to become `JP mainloop` (relative range exceeded after the insert).
+- **Build/deploy:** Source/HBIOS/Build.cmd as usual; the CP/M variant is
+  Source/Apps/Build.cmd → Binary/Apps/SYSCONF.COM.
+
 ## Deploying to the SC126 via rc2014bridge (COM10)
 
 The SC126's SD card stays in the machine. Deploy files over the serial console

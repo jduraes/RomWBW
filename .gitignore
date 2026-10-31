@@ -39,8 +39,10 @@ Source/Apps/SysGen.com
 Source/Apps/Talk.com
 Source/Apps/Timer.com
 Source/Apps/Tune/Tune.com
-!Source/Apps/VibeTune/vtune.com
+# VibeTune sources live in sibling ../VibeTune; Apps/VibeTune is a local junction
+Source/Apps/VibeTune/
 !Binary/Apps/vtune.com
+!Binary/Apps/vtunecfg.com
 Source/BPBIOS/bpsys.bak
 Source/BPBIOS/bpsys.dat
 Source/BPBIOS/def-ww.lib

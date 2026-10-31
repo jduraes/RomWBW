@@ -17,6 +17,7 @@ call :build sysgen || exit /b
 call :build XM || exit /b
 call :build FDU || exit /b
 call :build Tune || exit /b
+call :build VibeTune || exit /b
 call :build FAT || exit /b
 call :build Test || exit /b
 call :build ZMP || exit /b

@@ -226,6 +226,8 @@ helpandloop:				; HELP MENU
 	JP	Z,HELP_AB
 	cp	'B'			; Boot Options help menu
 	JP	Z,HELP_BO
+	cp	'S'			; Default Sound Unit help menu
+	JP	Z,HELP_SD
 ;
 printmainhelp:
 	ld	de,MSG_MENU		; nothing found Print the Main Menu
@@ -255,11 +257,13 @@ setvalueandloop:
 	JP	Z,SET_AB
 	cp	'B'			; Boot Options help menu
 	JP	Z,SET_BO
+	cp	'S'			; Default Sound Unit
+	JP	Z,SET_SD
 ;
 setvalueerror:
 	ld	de,MSG_QUESTION		; nothing found Print the Main Menu
 	CALL	prtstr			; print the selected help message
-	JR	mainloop
+	JP	mainloop
 ;
 setvaluesave:
 	LD	BC,BC_SYSSET_SWITCH	; SET THE VALUE
@@ -271,7 +275,7 @@ setvaluesave:
 ;
 statusandloop:
 	CALL	PRT_STATUS		; print status
-	JR	mainloop
+	JP	mainloop
 ;
 ; Call with Return to print status
 ;
@@ -287,6 +291,7 @@ PRT_STATUS:
 ;
 	CALL	STAT_BO
 	CALL	STAT_AB
+	CALL	STAT_SD
 ;
 ; end individual stats
 ;
@@ -495,6 +500,56 @@ MSG_AB_H	.DB	"\r\nAutomatic Boot (AB):\r\n"
 		.DB	"    e.g. S AB E,3 ; enabled (show menu) with 3 second timout before boot\r\n"
 		.DB	"         S AB E,0 ; enabled with immediate effect, bypass menu\r\n"
 		.DB	"         S AB D   ; disabled, just display menu\r\n",0
+;
+;=======================================================================
+;
+; DEFAULT SOUND UNIT
+;   Byte 0: (L)
+;     Bit 7-0 - SND unit for system sounds (boot beep, console BEL)
+;
+; PRINT CURRENT SWITCH VALUE
+;
+STAT_SD:
+	LD	BC,BC_SYSGET_SWITCH
+	LD	D,NVSW_SNDDEF
+	RST	08			; should return sound unit in HL
+	RET	NZ			; return if error
+	LD	de,MSG_SD
+	CALL	prtstr
+	LD	A,L			; unit number
+	JP	prtdecb			; print it and return
+;
+; SET SWITCH VALUE
+;
+SET_SD:
+	CALL	findskipws		; skip over WS to first char
+	JR	z,SET_SD_ERR		; if empty line, print main help
+	CALL	getnum			; next NUMBER is the unit
+	JR	C,SET_SD_ERR		; overflow
+	LD	A,C			; getnum also returns value in C
+	PUSH	AF			; save requested unit
+	LD	BC,BC_SYSGET_SNDCNT	; get sound unit count
+	RST	08			; E := count
+	POP	AF			; restore requested unit
+	CP	E			; unit < count?
+	JR	NC,SET_SD_ERR		; no, error
+	LD	L,A			; LOW BYTE, has the unit
+	LD	D,NVSW_SNDDEF		; DEFAULT SOUND UNIT
+	JP	setvaluesave		; SAVE THE VALUE
+SET_SD_ERR:
+	JP	setvalueerror		; ERROR. Added this so can use JR above
+;
+; PRINT HELP TEXT FOR SWITCH
+;
+HELP_SD:
+	ld	de,MSG_SD_H
+	JP	printhelp
+;
+MSG_SD:		.DB	CR,LF,"  [SD] / Sound Unit: ",0
+;
+MSG_SD_H	.DB	"\r\nDefault Sound Unit (SD):\r\n"
+		.DB	"  SD {unit}\r\n"
+		.DB	"    e.g. S SD 1 ; system sounds (boot beep, BEL) use unit 1\r\n",0
 ;
 ;=======================================================================
 ; Error Handlers

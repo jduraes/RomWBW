@@ -12,6 +12,7 @@ call :clean sysgen || exit /b
 call :clean XM || exit /b
 call :clean FDU || exit /b
 call :clean Tune || exit /b
+call :clean VibeTune || exit /b
 call :clean FAT || exit /b
 call :clean Test || exit /b
 call :clean ZMP || exit /b

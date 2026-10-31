@@ -1,229 +1,252 @@
+;
+; Quark timing
+; WAITQ uses HBIOS timer when available, else CPU-calibrated delay loop (40 T-states/iter).
+;
 
-;
-; Wait for quark play time.  Can use hardware timer if
-; supported by hardware or simple delay loop otherwise.
-; Delay loop requires QDLY to be pre-set to to achieve
-; optimal 20ms wait time.
-;
-WAITQ	LD	A,(WMOD)		; Get delay mode
-	OR	A			; Set flags
-	JR	Z,DLY			; Delay mode
-;
-	; Timer loop
-	CALL	TIM2			; Read timer LSB into A
-	LD	C,A			; Init prev value
-TIM1	PUSH	BC			; Save prev value
-	CALL	TIM2			; Read timer LSB into A
-	POP	BC			; Recover prev value
-	CP	C			; Compare to prev
-	RET	NZ			; Done if changed
-	JR	TIM1			; Else, loop
-;
-TIM2	LD	B,$F8			; BIOS SYSGET function
-	LD	C,$D0			; TIMER sub-function
-	RST	08			; Call BIOS
-	LD	A,L			; MSB to A
-	RET				; Return to loop
-;
-	; Delay spin loop (40 tstates per loop)
-DLY	LD	BC,(QDLY)		; Load quark delay factor
-	LD	A,B
-	OR	C
-	LD	BC,1
-	JR	NZ,DLY1
-DLY1	DEC	BC              	; [6]
-	NOP				; [4]
-	NOP				; [4]
-	NOP				; [4]
-	NOP				; [4]
-	LD	A,B             	; [4]
-	OR	C               	; [4]
-	JP	NZ,DLY1			; [10]
-	RET
-
-;
-; Test for timer running to determine if it can be used for delay
-; Return string message in DE
-; Assigned (WMOD) with 0 if no hardware time, 1 if hardware timer found
-; If -DELAY on command line, force delay mode
-;
 PROBETIMER:
-	LD	A,(DELAYMD)		; GET COMMAND LINE DELAY FLAG
-	OR	A			; TEST IT
-	LD	A,0			; ASSUME NO TIMER
-	LD	DE,MSGDLY		; DELAY MODE MESSAGE
-	JR	NZ,SETDLY		; IF TRUE, DONE
-	LD	B,BF_SYSGET		; HBIOS: GET function
-	LD	C,$D0			; TIMER subfunction
-	RST	08			; DE:HL := current tick count
-	LD	A,L			; DE:HL == 0?
+	LD	A, (DELAYMD)
+	OR	A
+	JR	Z, PROBETIMER_PROBE
+	; Forced delay: stay in delay mode but note live timer (SC126 -delay).
+	XOR	A
+	LD	(WMOD), A
+	LD	(FORCED_DLY_HWTIMER), A
+	LD	B, BF_SYSGET
+	LD	C, $D0
+	RST	08
+	LD	A, L
 	OR	H
 	OR	E
 	OR	D
-	LD	A,0			; Assume no timer
-	LD	DE,MSGDLY		; Delay mode msg
-	JR	Z,SETDLY		; If tick count is zero, no timer active
-	LD	A,$FF			; Value for timer active
-	LD	DE,MSGTIM		; Timer mode msg
-SETDLY:
-	LD	(WMOD),A		; Save wait mode
+	RET	Z
+	LD	A, 1
+	LD	(FORCED_DLY_HWTIMER), A
 	RET
-
-;
-; Delay-mode tempo trim for Z80 systems without a hardware quark timer.
-; Subtracts a small fixed bias from QDLY so playback matches timer-mode tempo.
-; Timer mode (WMOD != 0) is unchanged.
-;
-VT_DLY_BIAS	.EQU	52		; ~2% at 7.3 MHz (~2650 delay loops)
-
-VT_APPLY_DLY_BIAS:
-	LD	A,(WMOD)
-	OR	A
-	RET	NZ
-	LD	HL,(QDLY)
-	LD	DE,VT_DLY_BIAS
-	OR	A
-	SBC	HL,DE
-	JR	NC,VT_APPLY_DLY_BIAS_OK
-	LD	HL,(QDLY0)		; underflow: keep usable delay
-VT_APPLY_DLY_BIAS_OK:
-	LD	(QDLY),HL
-	RET
-
-;
-; Get a keystroke from CPM
-;
-GETKEY	LD	C,6		; BDOS direct I/O
-	LD	E,$FF		; Get character if available
-	CALL	BDOS	; Call BDOS
-	OR	A			; Set flags, Z set if no key
-	RET				; Done
-
-; Print detected CPU speed in MHz (X.YYY) below the startup banner.
-; Uses HBIOS SYSGET/CPUINFO (BC=$F8F0), DE := KHz.
-PRTCPUKHZBAN:
-	PUSH	AF
-	PUSH	BC
-	PUSH	DE
-	PUSH	HL
-	CALL	CRLF
-	LD	DE,MSGCPUMHZ
-	CALL	PRTSTR
-	LD	BC,$F8F0
+PROBETIMER_PROBE:
+	XOR	A
+	LD	(WMOD), A
+	LD	(FORCED_DLY_HWTIMER), A
+	LD	B, BF_SYSGET
+	LD	C, $D0
 	RST	08
-	EX	DE,HL
-
-	; Integer MHz = KHz / 1000 in B, remainder KHz in HL.
-	LD	B,0
-PRTCPUSPD_DIV1000:
-	LD	A,H
-	CP	03H
-	JR	C,PRTCPUSPD_DIV1000_DONE
-	JR	NZ,PRTCPUSPD_DIV1000_SUB
-	LD	A,L
-	CP	0E8H
-	JR	C,PRTCPUSPD_DIV1000_DONE
-PRTCPUSPD_DIV1000_SUB:
-	LD	A,L
-	SUB	0E8H
-	LD	L,A
-	LD	A,H
-	SBC	A,03H
-	LD	H,A
-	INC	B
-	JR	PRTCPUSPD_DIV1000
-PRTCPUSPD_DIV1000_DONE:
-
-	LD	A,B
-	CALL	PRTDECB
-	LD	A,'.'
-	CALL	PRTCHR
-
-	; Hundreds digit of remainder (0..999)
-	LD	A,0
-PRTCPUSPD_DIV100:
-	LD	B,A
-	LD	A,H
-	OR	A
-	JR	NZ,PRTCPUSPD_DIV100_SUB
-	LD	A,L
-	CP	100
-	JR	C,PRTCPUSPD_DIV100_DONE
-PRTCPUSPD_DIV100_SUB:
-	LD	A,L
-	SUB	100
-	LD	L,A
-	LD	A,H
-	SBC	A,0
-	LD	H,A
-	LD	A,B
-	INC	A
-	JR	PRTCPUSPD_DIV100
-PRTCPUSPD_DIV100_DONE:
-	LD	A,B
-	ADD	A,'0'
-	CALL	PRTCHR
-
-	; Tens digit of remainder (0..99)
-	LD	A,0
-PRTCPUSPD_DIV10:
-	LD	B,A
-	LD	A,L
-	CP	10
-	JR	C,PRTCPUSPD_DIV10_DONE
-	SUB	10
-	LD	L,A
-	LD	A,B
-	INC	A
-	JR	PRTCPUSPD_DIV10
-PRTCPUSPD_DIV10_DONE:
-	LD	A,B
-	ADD	A,'0'
-	CALL	PRTCHR
-
-	; Ones digit of remainder
-	LD	A,L
-	ADD	A,'0'
-	CALL	PRTCHR
-
-	LD	DE,MSGMHZ
-	CALL	PRTSTR
-	POP	HL
-	POP	DE
-	POP	BC
-	POP	AF
+	LD	A, L
+	OR	H
+	OR	E
+	OR	D
+	RET	Z
+	LD	A, $FF
+	LD	(WMOD), A
 	RET
 
-;
-; Drain any pending console keypresses (used to clear command-enter residue).
-;
-FLUSHKEYS:
-	PUSH	AF
-	PUSH	BC
-	PUSH	DE
+INIT_QDLY_BASE:
+	LD	B, BF_SYSGET
+	LD	C, $F0
+	RST	08
+	LD	(CPUKHZ), DE
+	SRL	D
+	RR	E
+	EX	DE, HL
+	LD	(QDLY0), HL
+	LD	(QDLY), HL
+	RET
+
+APPLY_ENGINE_QDLY_ADJ:
+	LD	HL, (QDLY0)
+	LD	DE, 185
+#IFDEF MYM
+	LD	A, (FILE_ENGINE)
+	CP	ENGINE_MYM
+	JR	NZ, APPLY_QDLY_SUB
+	LD	DE, 125
+#ENDIF
+	LD	A, (SAAMD)		; SAA XLATE is ~1 ms/frame heavier than AY OUT;
+	OR	A			; widen offset (185->370) so the frame stays 20 ms
+	JR	Z, APPLY_QDLY_SUB
+	LD	DE, 310		; SAA XLATE ~1 ms/frame heavier; 93 BPM on rl2wof (Zed Mini)
+APPLY_QDLY_SUB:
+	OR	A
+	SBC	HL, DE
+	JR	NC, APPLY_QDLY_PTX
+	XOR	A
+	LD	H, A
+	LD	L, A
+APPLY_QDLY_PTX:
+	LD	A, (FILE_ENGINE)
+	CP	ENGINE_PTX
+	JR	NZ, APPLY_QDLY_STORE
+	LD	A, (WMOD)
+	OR	A
+	JR	NZ, APPLY_QDLY_STORE
+	LD	A, (TSFLAG)
+	OR	A
+	JR	NZ, APPLY_QDLY_CHK_DUAL
+	JR	APPLY_QDLY_SC126_SCALE
+APPLY_QDLY_CHK_DUAL:
+	LD	A, (TS_DUALHW)
+	OR	A
+	JR	Z, APPLY_QDLY_SC126_SCALE
+	LD	(QDLY), HL
+	CALL	TS_ADJTIM
+	; RC2014 rl2wofts cal (delay, TS dual): trim->BPM empirical, non-linear.
+	; 856->90, 1084->97; bracket 94 => trim 856+(94-90)*(228/7) ~ 986.
+	LD	HL, (QDLY)
+	LD	DE, 986
+	LD	A, (SAAMD)		; SAA TS-dual: two XLATEs per frame run long;
+	OR	A			; at trim 986 -> 88 BPM, slope ~32.6 units/BPM
+	JR	Z, APPLY_QDLY_TS_SUB
+	LD	DE, 1149		; -> +163 for 93 BPM (Zed Mini, rl2wofts)
+APPLY_QDLY_TS_SUB:
+	OR	A
+	SBC	HL, DE
+	JR	NC, APPLY_QDLY_TS_TRIM_OK
+	XOR	A
+	LD	H, A
+	LD	L, A
+APPLY_QDLY_TS_TRIM_OK:
+	LD	(QDLY), HL
+	JR	APPLY_QDLY_STORE
+
+; SC126 forced -delay (single-chip PTx): scale QDLY up (~114->94 BPM).
+; Z180 platforms only — this trim was tuned on SC126 hardware; on plain-Z80
+; machines (e.g. RC2014 Zed Mini) it wrongly stretches every frame ~21%.
+APPLY_QDLY_SC126_SCALE:
+	LD	A, (FORCED_DLY_HWTIMER)
+	OR	A
+	JR	Z, APPLY_QDLY_STORE
+	LD	A, (Z180_IO_BASE)	; $FF = not a Z180 platform
+	CP	$FF
+	JR	Z, APPLY_QDLY_STORE
+	LD	(QDLY), HL
+	CALL	SC126_DLY_SCALE
+	LD	HL, (QDLY)
+	JR	APPLY_QDLY_STORE
+
+APPLY_QDLY_STORE:
+	LD	(QDLY), HL
+	RET
+
+; QDLY := QDLY * 155 / 128 (SC126 single-chip forced delay).
+SC126_DLY_SCALE:
+	LD	HL, (QDLY)
 	PUSH	HL
-FLUSHKEYS1:
-	CALL	GETKEY
-	JR	Z,FLUSHKEYS2
-	JR	FLUSHKEYS1
-FLUSHKEYS2:
-	POP	HL
+	LD	B, H
+	LD	C, L
+	LD	H, B
+	LD	L, C
+	LD	A, 7
+SC126_S7:
+	SRL	H
+	RR	L
+	DEC	A
+	JR	NZ, SC126_S7
+	LD	D, H
+	LD	E, L
+	LD	H, D
+	LD	L, E
+	ADD	HL, HL
+	ADD	HL, DE
+	ADD	HL, HL
+	ADD	HL, HL
+	ADD	HL, DE
+	ADD	HL, HL
+	ADD	HL, DE
 	POP	DE
-	POP	BC
-	POP	AF
+	ADD	HL, DE
+	LD	(QDLY), HL
 	RET
-;
-; Print the wait mode suffix based on WMOD
-;   WMOD == 0  -> delay mode
-;   WMOD != 0  -> timer mode
-;
-PRTWMOD:
-	LD	A,(WMOD)
+
+; QDLY := QDLY * 97 / 128 (tune.com TS_ADJTIM).
+TS_ADJTIM:
+	LD	HL, (QDLY)
+	LD	B, H
+	LD	C, L
+	LD	H, B
+	LD	L, C
+	SRL	H
+	RR	L
+	SRL	H
+	RR	L
+	EX	DE, HL
+	LD	H, B
+	LD	L, C
 	OR	A
-	JR	Z,PRTWMOD_DLY
-	LD	DE,MSGTIM
-	JR	PRTWMOD_P
-PRTWMOD_DLY:
-	LD	DE,MSGDLY
-PRTWMOD_P:
+	SBC	HL, DE
+	PUSH	HL
+	LD	H, B
+	LD	L, C
+	LD	A, 7
+TS_ADJ2:
+	SRL	H
+	RR	L
+	DEC	A
+	JR	NZ, TS_ADJ2
+	POP	DE
+	ADD	HL, DE
+	LD	(QDLY), HL
+	RET
+
+PRINT_TIMING_MODE:
+	LD	A, (WMOD)
+	OR	A
+	LD	DE, MSG_TIMING_DLY
+	JR	Z, PRINT_TIMING_MODE_OUT
+	LD	DE, MSG_TIMING_TIM
+PRINT_TIMING_MODE_OUT:
 	JP	PRTSTR
+
+; SC126 forced -delay: bracket entire quark (play + wait) against HBIOS IRQ jitter.
+FORCED_DLY_FRAME_BEGIN:
+	LD	A, (FORCED_DLY_HWTIMER)
+	OR	A
+	RET	Z
+	LD	A, (PLAY_STATE)
+	CP	PLAY_PLAYING
+	RET	NZ
+	DI
+	RET
+
+FORCED_DLY_FRAME_END:
+	LD	A, (FORCED_DLY_HWTIMER)
+	OR	A
+	RET	Z
+	EI
+	RET
+
+WAITQ:
+	LD	A, (WMOD)
+	OR	A
+	JR	Z, WAITQ_DLY
+WAITQ_TIM:
+	CALL	WAITQ_TIM2
+	LD	C, A
+WAITQ_TIM1:
+	PUSH	BC
+	CALL	WAITQ_TIM2
+	POP	BC
+	CP	C
+	RET	NZ
+	JR	WAITQ_TIM1
+
+WAITQ_TIM2:
+	LD	B, BF_SYSGET
+	LD	C, $D0
+	RST	08
+	LD	A, L
+	RET
+
+WAITQ_DLY:
+	LD	BC, (QDLY)
+	LD	A, B
+	OR	C
+	JR	NZ, WAITQ_DLY1
+	LD	BC, 1			; QDLY==0: avoid DEC wrap to 65535
+WAITQ_DLY1:
+	DEC	BC
+	NOP
+	NOP
+	NOP
+	NOP
+	LD	A, B
+	OR	C
+	JP	NZ, WAITQ_DLY1
+	RET

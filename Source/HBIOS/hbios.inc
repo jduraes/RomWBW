@@ -365,6 +365,7 @@ SW_OPT		.EQU	%00000111	; SLICE/ROM APP
 ; used for identifying Non Volatile Switches
 NVSW_BOOTOPTS	.EQU	1		; Boot Options NVRAM Switch
 NVSW_AUTOBOOT	.EQU	3		; Auto Boot NVRAM Switch
+NVSW_SNDDEF	.EQU	4		; Default Sound Unit NVRAM Switch
 ;
 ; NVRAM SWITCH BIT MASKS
 ;
