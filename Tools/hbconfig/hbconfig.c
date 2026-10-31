@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdarg.h>
 
 #define MAXTOK   256
 
@@ -65,6 +66,7 @@ typedef struct {
 typedef struct {
     const char *target_path;    /* file the user named            */
     SList       recs;           /* all .EQU/.SET records in order */
+    SList       consts;         /* pick-list constants (std.asm)  */
     char        master_path[1024];
     int         error;
 } ParseCtx;
@@ -859,7 +861,10 @@ static const char *master_comment(ParseCtx *ctx, const char *name)
     return NULL;
 }
 
-static int cmd_write(ParseCtx *ctx, int argc, char **argv, int a0)
+typedef struct { char *name; char *val; } Edit;
+
+/* apply a list of edits to the target file (SPEC.md section 7) */
+static int apply_edits(ParseCtx *ctx, Edit *edits, int nedit_req)
 {
     TFile tf;
     int i, a, nedit = 0, changed = 0;
@@ -877,20 +882,17 @@ static int cmd_write(ParseCtx *ctx, int argc, char **argv, int a0)
     eol = tf.eol_crlf ? "\r\n" : "\n";
 
     /* apply each NAME=VALUE edit */
-    for (a = a0; a < argc; a++) {
-        char *eq = strchr(argv[a], '=');
-        char *name, *val;
+    for (a = 0; a < nedit_req; a++) {
+        char *name = edits[a].name;
+        char *val = edits[a].val;
         Setting *inh;
         TSet *last = NULL;
         int k;
 
-        if (!eq) { fprintf(stderr, "hbconfig: edit '%s' is not NAME=VALUE\n", argv[a]); return 1; }
-        *eq = '\0';
-        name = argv[a]; val = eq + 1;
         upper(name);
         check_ascii(name, 0, "argument");
         check_ascii(val, 0, "argument");
-        if (*name == '\0' || *val == '\0') { fprintf(stderr, "hbconfig: bad edit '%s'\n", argv[a]); return 1; }
+        if (*name == '\0' || *val == '\0') { fprintf(stderr, "hbconfig: bad edit '%s'\n", name); return 1; }
 
         /* the setting must exist somewhere in the cascade */
         if (!find_setting(&ctx->recs, name, 0)) {
@@ -1011,9 +1013,566 @@ static int cmd_write(ParseCtx *ctx, int argc, char **argv, int a0)
     return 0;
 }
 
+static int cmd_write(ParseCtx *ctx, int argc, char **argv, int a0)
+{
+    Edit *edits;
+    int a, rc;
+
+    edits = (Edit *)xmalloc(sizeof(Edit) * (size_t)(argc - a0 + 1));
+    for (a = a0; a < argc; a++) {
+        char *eq = strchr(argv[a], '=');
+        if (!eq) { fprintf(stderr, "hbconfig: edit '%s' is not NAME=VALUE\n", argv[a]); free(edits); return 1; }
+        *eq = '\0';
+        edits[a - a0].name = argv[a];
+        edits[a - a0].val = eq + 1;
+    }
+    rc = apply_edits(ctx, edits, argc - a0);
+    free(edits);
+    return rc;
+}
+
 /*==================================================================================================
- * MAIN
+ * TUI (SPEC.md sections 4/5) - menuconfig-style console UI
+ *
+ * Portable console layer: ANSI escape sequences everywhere; on Windows
+ * VT processing is enabled on the console first.  Key input: conio on
+ * Windows, termios cbreak elsewhere.
  *=================================================================================================*/
+
+#ifdef _WIN32
+#include <conio.h>
+#include <windows.h>
+static void con_init(void)
+{
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+    if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode))
+        SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+}
+static int con_getkey(void) { return _getch(); }
+#else
+#include <termios.h>
+#include <unistd.h>
+#include <sys/select.h>
+static struct termios saved_tio;
+static void con_init(void)
+{
+    struct termios t;
+    if (tcgetattr(0, &saved_tio) == 0) {
+        t = saved_tio;
+        t.c_lflag &= ~(ICANON | ECHO);
+        t.c_cc[VMIN] = 1;
+        tcsetattr(0, TCSANOW, &t);
+    }
+    const char *term = getenv("TERM");
+    if (!term) setenv("TERM", "xterm", 1);
+}
+static void con_done(void)
+{
+    tcsetattr(0, TCSANOW, &saved_tio);
+}
+static int con_getkey(void) { return getchar(); }
+#endif
+
+#define ESC "\x1b"
+
+typedef enum { TY_BOOL, TY_NUM, TY_HEX, TY_PICK, TY_TEXT } VType;
+
+typedef struct {
+    char   name[64];
+    VType  type;
+    char   value[128];      /* live (session) value        */
+    char   orig[128];       /* effective value at start    */
+    char   inh[128];        /* inherited value, "" if none */
+    char   inhfile[512];    /* where the inherited value comes from */
+    int    changed;         /* edited this session         */
+    /* pick list */
+    char   opts[32][64];
+    int    nopts;
+    int    range_lo, range_hi;   /* TY_NUM when comment has (N-M) */
+    /* help */
+    const char *comment;
+    const char *xhelp;
+    int    master_line;
+} Item;
+
+typedef struct {
+    char   title[96];
+    Item **items;
+    int    n, cap;
+} Menu;
+
+typedef struct {
+    Menu  *menus;
+    int    nmenus, capmenus;
+    Item  *items;          /* master copy, in master definition order */
+    int    nitems;
+} Model;
+
+static Menu *model_new_menu(Model *m, const char *title)
+{
+    if (m->nmenus == m->capmenus) {
+        m->capmenus = m->capmenus ? m->capmenus * 2 : 16;
+        m->menus = realloc(m->menus, m->capmenus * sizeof(Menu));
+    }
+    memset(&m->menus[m->nmenus], 0, sizeof(Menu));
+    snprintf(m->menus[m->nmenus].title, sizeof(m->menus[m->nmenus].title), "%s", title);
+    return &m->menus[m->nmenus++];
+}
+
+static void menu_add(Menu *mn, Item *it)
+{
+    if (mn->n == mn->cap) {
+        mn->cap = mn->cap ? mn->cap * 2 : 16;
+        mn->items = realloc(mn->items, mn->cap * sizeof(Item *));
+    }
+    mn->items[mn->n++] = it;
+}
+
+/* classify a master value into an editor type, per RULES.md section 2 */
+static VType item_type(ParseCtx *ctx, const char *val, Item *it)
+{
+    const char *p = val;
+    if (value_eq(val, "TRUE") || value_eq(val, "FALSE")) return TY_BOOL;
+    if (p[0] == '$') return TY_HEX;
+    {
+        int alldig = 1;
+        for (; *p; p++) if (!isdigit((unsigned char)*p)) { alldig = 0; break; }
+        if (alldig && p > val) return TY_NUM;
+    }
+    /* pick list: val names a constant defined in the cascade (std.asm /
+       hbios.inc included from master) with same-prefix siblings */
+    if (isalpha((unsigned char)val[0]) || val[0] == '_') {
+        const char *us = strrchr(val, '_');
+        int cnt = 0, i;
+        if (us && us[1]) {
+            size_t plen = (size_t)(us - val) + 1;
+            /* candidates: std.asm constants (scanned separately) plus any
+               cascade record that is not a config setting/master line */
+            for (i = 0; i < ctx->consts.n + ctx->recs.n && cnt < 32; i++) {
+                Setting *s = i < ctx->consts.n ? &ctx->consts.v[i] : &ctx->recs.v[i - ctx->consts.n];
+                if (strncmp(s->name, val, plen) != 0) continue;
+                /* RULES.md 2: pick-list constants live in std.asm / hbios.inc */
+                {
+                    const char *b = strrchr(s->file, '/');
+                    const char *b2 = strrchr(s->file, '\\');
+                    if (b2 && (!b || b2 > b)) b = b2;
+                    b = b ? b + 1 : s->file;
+                    if (strcmp(b, "std.asm") != 0 && strcmp(b, "hbios.inc") != 0)
+                        continue;
+                }
+                snprintf(it->opts[cnt], sizeof(it->opts[cnt]), "%s", s->name);
+                cnt++;
+            }
+            if (cnt >= 2) {
+                it->nopts = cnt;
+                return TY_PICK;
+            }
+        }
+    }
+    return TY_TEXT;
+}
+
+/* inherited value + its source file (SPEC.md section 3) */
+static void item_inherited(ParseCtx *ctx, const char *name, Item *it)
+{
+    Setting *s = find_setting(&ctx->recs, name, 1);
+    if (s) {
+        snprintf(it->inh, sizeof(it->inh), "%s", s->value);
+        snprintf(it->inhfile, sizeof(it->inhfile), "%s", s->file);
+    } else {
+        it->inh[0] = '\0';
+        it->inhfile[0] = '\0';
+    }
+}
+
+/* (0-N) range from a comment, per RULES.md section 2 */
+static void item_range(Item *it)
+{
+    const char *p = it->comment ? strstr(it->comment, "(0-") : NULL;
+    it->range_lo = 0; it->range_hi = -1;
+    if (p) {
+        int hi = atoi(p + 3);
+        if (hi > 0) it->range_hi = hi;
+    }
+}
+
+static int model_build(ParseCtx *ctx, Model *m)
+{
+    int i, j;
+    Setting *master = NULL;
+    int nmaster = 0;
+
+    memset(m, 0, sizeof(*m));
+
+    /* collect master records (definition order) */
+    for (i = 0; i < ctx->recs.n; i++) {
+        Setting *s = &ctx->recs.v[i];
+        int seen = 0;
+        if (!s->in_master || strstr(s->file, "cfg_MASTER") == NULL) continue;
+        for (j = 0; j < i; j++)
+            if (ctx->recs.v[j].in_master && strcmp(ctx->recs.v[j].name, s->name) == 0 &&
+                strstr(ctx->recs.v[j].file, "cfg_MASTER")) { seen = 1; break; }
+        if (seen) continue;
+        master = realloc(master, (nmaster + 1) * sizeof(Setting));
+        master[nmaster++] = *s;
+    }
+    if (!nmaster) { fprintf(stderr, "hbconfig: no master settings found\n"); return 1; }
+
+    m->items = (Item *)calloc((size_t)nmaster, sizeof(Item));
+    m->nitems = nmaster;
+
+    for (i = 0; i < nmaster; i++) {
+        Setting *eff = find_setting(&ctx->recs, master[i].name, 0);
+        Item *it = &m->items[i];
+        snprintf(it->name, sizeof(it->name), "%s", master[i].name);
+        snprintf(it->value, sizeof(it->value), "%s", eff->value);
+        snprintf(it->orig, sizeof(it->orig), "%s", eff->value);
+        it->comment = master[i].comment;
+        it->xhelp = master[i].xhelp;
+        it->master_line = master[i].line;
+        it->type = item_type(ctx, master[i].value, it);
+        item_range(it);
+        item_inherited(ctx, it->name, it);
+    }
+
+    /* menus: driver menus from <BASE>ENABLE (RULES.md section 3), longest
+       BASE wins; remaining settings grouped into adjacent-line blocks */
+    {
+        char *menu_of = (char *)calloc((size_t)nmaster, sizeof(char));  /* menu idx+1 or 0 */
+        int *assigned = (int *)calloc((size_t)nmaster, sizeof(int));
+
+        /* driver menus, longest BASE first */
+        for (;;) {
+            int best = -1; size_t bestlen = 0;
+            for (i = 0; i < nmaster; i++) {
+                size_t nl = strlen(master[i].name);
+                if (nl <= 6) continue;
+                if (strcmp(master[i].name + nl - 6, "ENABLE") != 0) continue;
+                if (menu_of[i]) continue;
+                if (nl - 6 > bestlen) { bestlen = nl - 6; best = i; }
+            }
+            if (best < 0) break;
+            {
+                size_t bl = bestlen;
+                char base[64];
+                Menu *mn;
+                char title[96];
+                snprintf(base, sizeof(base), "%.*s", (int)bl, master[best].name);
+                /* title: ENABLE's comment, "BASE: " in front unless already prefixed */
+                if (strncmp(master[best].comment, base, bl) == 0)
+                    snprintf(title, sizeof(title), "%s", master[best].comment);
+                else
+                    snprintf(title, sizeof(title), "%s: %s", base, master[best].comment);
+                mn = model_new_menu(m, title);
+                for (i = 0; i < nmaster; i++) {
+                    if (assigned[i]) continue;
+                    if (strncmp(master[i].name, base, bl) == 0) {
+                        menu_add(mn, &m->items[i]);
+                        assigned[i] = 1;
+                        menu_of[i] = (char)1;
+                    }
+                }
+            }
+        }
+
+        /* remaining: blocks of adjacent master lines (gap == 1 line) */
+        i = 0;
+        while (i < nmaster) {
+            int j2, start = i;
+            Menu *mn;
+            char title[96];
+            while (i + 1 < nmaster && !assigned[i + 1] &&
+                   master[i + 1].line == master[i].line + 1 &&
+                   strcmp(master[i + 1].file, master[i].file) == 0)
+                i++;
+            /* block = start..i (only if at least one unassigned; split
+               runs containing assigned items) */
+            {
+                int has = 0;
+                for (j2 = start; j2 <= i; j2++) if (!assigned[j2]) has = 1;
+                if (has) {
+                    /* title: common comment prefix up to ':', else FIRST..LAST */
+                    const char *c0 = master[start].comment;
+                    const char *col = strchr(c0, ':');
+                    if (col && (size_t)(col - c0) < 20)
+                        snprintf(title, sizeof(title), "%.*s", (int)(col - c0), c0);
+                    else if (start == i)
+                        snprintf(title, sizeof(title), "%s", master[start].name);
+                    else
+                        snprintf(title, sizeof(title), "%s .. %s",
+                                 master[start].name, master[i].name);
+                    mn = model_new_menu(m, title);
+                    for (j2 = start; j2 <= i; j2++)
+                        if (!assigned[j2]) { menu_add(mn, &m->items[j2]); assigned[j2] = 1; }
+                }
+            }
+            i++;
+        }
+        free(menu_of); free(assigned);
+    }
+    free(master);
+    return 0;
+}
+
+/* does the std/target file set this setting (own record outside master)? */
+static int item_is_local(ParseCtx *ctx, const char *name)
+{
+    int i;
+    for (i = 0; i < ctx->recs.n; i++)
+        if (!ctx->recs.v[i].in_master && strcmp(ctx->recs.v[i].name, name) == 0)
+            return 1;
+    return 0;
+}
+
+/* relevant per SPEC.md section 4: local settings, settings in menus of
+   enabled drivers, and session-changed settings */
+static int menu_relevant(ParseCtx *ctx, Menu *mn, int show_all)
+{
+    int i, base_ena = -1;
+    if (show_all) return 1;
+    /* find the menu's ENABLE item: title comment belongs to it; check if
+       any item is *ENABLE whose effective value is TRUE */
+    for (i = 0; i < mn->n; i++) {
+        size_t nl = strlen(mn->items[i]->name);
+        if (nl > 6 && strcmp(mn->items[i]->name + nl - 6, "ENABLE") == 0) {
+            base_ena = i;
+            if (value_eq(mn->items[i]->value, "TRUE")) return 1;
+        }
+    }
+    (void)base_ena;
+    for (i = 0; i < mn->n; i++)
+        if (mn->items[i]->changed || item_is_local(ctx, mn->items[i]->name))
+            return 1;
+    return 0;
+}
+
+static void ui_clear(void) { fputs(ESC "[2J" ESC "[H", stdout); }
+static void ui_status(const char *fmt, ...)
+{
+    va_list ap;
+    fputs(ESC "[" "999;1H" ESC "[2K", stdout);
+    va_start(ap, fmt);
+    vfprintf(stdout, fmt, ap);
+    va_end(ap);
+    fflush(stdout);
+}
+
+/* one-line editor at the bottom */
+static void ui_edit_line(const char *prompt, char *buf, size_t bufsz)
+{
+    size_t len = strlen(buf);
+    int c;
+    for (;;) {
+        fputs(ESC "[999;1H" ESC "[2K", stdout);
+        fprintf(stdout, "%s%s_", prompt, buf);
+        fflush(stdout);
+        c = con_getkey();
+        if (c == '\r' || c == '\n') break;
+        if (c == 27) break;
+        if (c == '\b' || c == 127 || c == 8) { if (len) buf[--len] = '\0'; continue; }
+#ifdef _WIN32
+        if (c == 0 || c == 224) { con_getkey(); continue; }  /* swallow fn keys */
+#endif
+        if (isprint(c) && len + 1 < bufsz) { buf[len++] = (char)c; buf[len] = '\0'; }
+    }
+    fputs(ESC "[999;1H" ESC "[2K", stdout);
+}
+
+static void ui_help(Item *it)
+{
+    ui_clear();
+    printf("HELP: %s\n\n", it->name);
+    if (it->comment && *it->comment) printf("%s\n", it->comment);
+    if (it->xhelp) {
+        const char *p = it->xhelp;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            if (nl) { printf("%.*s\n", (int)(nl - p), p); p = nl + 1; }
+            else { printf("%s\n", p); break; }
+        }
+    }
+    printf("\n");
+    if (it->inh[0])
+        printf("inherited: %s  (from %s)\n", it->inh, it->inhfile);
+    else
+        printf("inherited: (none - master default)\n");
+    printf("current:   %s\n", it->value);
+    printf("any key to return...");
+    fflush(stdout);
+    con_getkey();
+}
+
+static void item_edit(Item *it)
+{
+    char buf[128];
+    switch (it->type) {
+    case TY_BOOL:
+        snprintf(it->value, sizeof(it->value), "%s",
+                 value_eq(it->value, "TRUE") ? "FALSE" : "TRUE");
+        it->changed = !value_eq(it->value, it->orig);
+        break;
+    case TY_PICK: {
+        int i, cur = -1;
+        for (i = 0; i < it->nopts; i++)
+            if (value_eq(it->value, it->opts[i])) { cur = i; break; }
+        cur = (cur + 1) % it->nopts;
+        snprintf(it->value, sizeof(it->value), "%s", it->opts[cur]);
+        it->changed = !value_eq(it->value, it->orig);
+        break;
+    }
+    case TY_NUM:
+    case TY_HEX:
+    case TY_TEXT:
+    default:
+        snprintf(buf, sizeof(buf), "%s", it->value);
+        ui_edit_line("new value: ", buf, sizeof(buf));
+        if (*buf) {
+            if (it->type == TY_NUM) {
+                long v = strtol(buf, NULL, 0);
+                if (it->range_hi >= 0 && (v < it->range_lo || v > it->range_hi)) {
+                    ui_status("value out of range (%d-%d)", it->range_lo, it->range_hi);
+                    return;
+                }
+            }
+            snprintf(it->value, sizeof(it->value), "%s", buf);
+            it->changed = !value_eq(it->value, it->orig);
+        }
+        break;
+    }
+}
+
+static int cmd_menu(ParseCtx *ctx)
+{
+    Model m;
+    int mi = 0, si = 0, show_all = 0, quit = 0, saved = 0;
+
+    if (model_build(ctx, &m)) return 1;
+
+#ifndef _WIN32
+    atexit(con_done);
+#endif
+    con_init();
+    ui_clear();
+
+    while (!quit) {
+        Menu *mn = &m.menus[mi];
+        int vis_n = 0, i, row = 3;
+        /* count visible items */
+        if (!menu_relevant(ctx, mn, show_all)) {
+            /* skip empty menu */
+            mi = (mi + 1) % m.nmenus;
+            continue;
+        }
+        printf(ESC "[H" ESC "[2K");
+        printf("hbconfig  %s   [menu %d/%d]  keys: " \
+               "up/dn=move pgup/pgdn=menu enter=edit h=help a=all s=save q=quit\n",
+               ctx->target_path, mi + 1, m.nmenus);
+        printf(ESC "[1;33m%s" ESC "[0m\n\n", mn->title);
+        for (i = 0; i < mn->n && row < 40; i++) {
+            Item *it = mn->items[i];
+            int local = item_is_local(ctx, it->name);
+            const char *mark = it->changed ? "*" : (local ? "+" : " ");
+            printf(ESC "[%d;1H" ESC "[2K", row);
+            if (i == si) fputs(ESC "[7m", stdout);
+            printf("%s %-22s %-26s ", mark, it->name, it->value);
+            if (it->comment && *it->comment)
+                printf(ESC "[2m%.40s" ESC "[0m", it->comment);
+            if (i == si) fputs(ESC "[0m", stdout);
+            row++;
+            vis_n++;
+        }
+        (void)vis_n;
+        fflush(stdout);
+
+        {
+            int c = con_getkey();
+            switch (c) {
+            case 'q': case 'Q': quit = 1; break;
+            case 'a': case 'A': show_all = !show_all; break;
+            case 'h': case 'H': ui_help(mn->items[si]); break;
+            case 's': case 'S': {
+                /* collect session changes vs original effective values */
+                Edit *edits = (Edit *)xmalloc(sizeof(Edit) * (size_t)m.nitems);
+                int ne = 0, k, rc;
+                for (k = 0; k < m.nitems; k++)
+                    if (m.items[k].changed &&
+                        !value_eq(m.items[k].value, m.items[k].orig)) {
+                        edits[ne].name = m.items[k].name;
+                        edits[ne].val = m.items[k].value;
+                        ne++;
+                    }
+                /* leave raw mode so apply_edits' reports print cleanly */
+#ifdef _WIN32
+                printf("\n");
+#else
+                con_done();
+#endif
+                if (ne == 0) printf("; no changes\n");
+                else {
+                    ui_clear();
+                    rc = apply_edits(ctx, edits, ne);
+                    saved = (rc == 0);
+                }
+                free(edits);
+                /* re-read the cascade: effective values changed on disk */
+                {
+                    ParseCtx nctx;
+                    memset(&nctx, 0, sizeof(nctx));
+                    nctx.target_path = ctx->target_path;
+                    parse_file(&nctx, ctx->target_path, 0, 1, 0);
+                    for (k = 0; k < m.nitems; k++) {
+                        Setting *e = find_setting(&nctx.recs, m.items[k].name, 0);
+                        if (e) {
+                            snprintf(m.items[k].value, sizeof(m.items[k].value), "%s", e->value);
+                            snprintf(m.items[k].orig, sizeof(m.items[k].orig), "%s", e->value);
+                            m.items[k].changed = 0;
+                            item_inherited(&nctx, m.items[k].name, &m.items[k]);
+                        }
+                    }
+                    /* nctx leaks; short-lived session tool */
+                }
+#ifndef _WIN32
+                con_init();
+#endif
+                ui_status("saved. any key...");
+                con_getkey();
+                break;
+            }
+            case '\r': case '\n': case ' ':
+                item_edit(mn->items[si]);
+                break;
+#ifdef _WIN32
+            case 0: case 224: {
+                int k2 = con_getkey();
+                if (k2 == 72) { if (si > 0) si--; }              /* up */
+                else if (k2 == 80) { if (si < mn->n - 1) si++; } /* down */
+                else if (k2 == 73) { mi = (mi + m.nmenus - 1) % m.nmenus; si = 0; }
+                else if (k2 == 81) { mi = (mi + 1) % m.nmenus; si = 0; }
+                break;
+            }
+#else
+            case 27: {
+                int c2 = con_getkey();
+                if (c2 != '[') break;
+                c2 = con_getkey();
+                if (c2 == 'A') { if (si > 0) si--; }
+                else if (c2 == 'B') { if (si < mn->n - 1) si++; }
+                else if (c2 == 'I') { mi = (mi + m.nmenus - 1) % m.nmenus; si = 0; }
+                else if (c2 == 'V' || c2 == '6') { mi = (mi + 1) % m.nmenus; si = 0; }
+                break;
+            }
+#endif
+            }
+        }
+    }
+
+    ui_clear();
+#ifndef _WIN32
+    con_done();
+#endif
+    return saved ? 0 : 0;
+}
 
 static void usage(void)
 {
@@ -1034,7 +1593,7 @@ int main(int argc, char **argv)
 {
     ParseCtx ctx;
     char path[1024];
-    enum { M_SHOW, M_CHECK, M_WRITE } mode = M_SHOW;
+    enum { M_SHOW, M_CHECK, M_WRITE, M_MENU } mode = M_SHOW;
     int a0 = 3;
 
     memset(&ctx, 0, sizeof(ctx));
@@ -1043,6 +1602,7 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "-show") == 0) mode = M_SHOW;
     else if (strcmp(argv[1], "-check") == 0) mode = M_CHECK;
     else if (strcmp(argv[1], "-write") == 0) mode = M_WRITE;
+    else if (strcmp(argv[1], "-menu") == 0) mode = M_MENU;
     else usage();
 
     /* config-file vs platform+config: a path separator or .asm suffix
@@ -1064,6 +1624,7 @@ int main(int argc, char **argv)
     case M_SHOW:  return cmd_show(&ctx);
     case M_CHECK: return cmd_check(&ctx);
     case M_WRITE: return cmd_write(&ctx, argc, argv, a0);
+    case M_MENU:  return cmd_menu(&ctx);
     }
     return 2;
 }
