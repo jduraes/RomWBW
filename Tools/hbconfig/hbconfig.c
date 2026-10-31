@@ -77,6 +77,13 @@ static char *xstrdup(const char *s)
     return p;
 }
 
+static void *xmalloc(size_t n)
+{
+    void *p = malloc(n);
+    if (!p) die("out of memory");
+    return p;
+}
+
 static void slist_push(SList *sl, Setting s)
 {
     if (sl->n == sl->cap) {
@@ -697,6 +704,314 @@ static int cmd_check(ParseCtx *ctx)
 }
 
 /*==================================================================================================
+ * -write MODE (SPEC.md section 7)
+ *
+ * Applies NAME=VALUE edits to the target file only:
+ *   - already set by the file: value replaced in its last .SET line, rest
+ *     of the line (tabs, comment) untouched
+ *   - set back to the inherited value: .SET lines removed, with the
+ *     indented "; ..." continuation lines right below them
+ *   - not set by the file: appended at the end in the house layout
+ *     (name col 0, .SET col 16, value col 24, comment col 40, tabs 8 wide)
+ * Every other line stays byte-identical; line endings preserved; the new
+ * content is written to a temp file and swapped in.
+ *=================================================================================================*/
+
+typedef struct {
+    int    idx;          /* line index in the target file          */
+    char   name[64];
+    size_t vstart, vend; /* value span within the line text        */
+    int    removed;      /* line dropped by an edit                */
+} TSet;
+
+typedef struct {
+    char     **text;     /* line text without EOL                  */
+    int        n, cap;
+    int        eol_crlf; /* 1 = CRLF, 0 = LF                       */
+    TSet      *sets;     /* .SET/.EQU lines physically in the file */
+    int        nsets, capsets;
+    char      *raw;      /* original file bytes                    */
+    size_t     rawlen;
+} TFile;
+
+static int target_load(TFile *tf, const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    long sz;
+    char *p;
+
+    memset(tf, 0, sizeof(*tf));
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
+    tf->raw = (char *)xmalloc((size_t)sz + 1);
+    if (fread(tf->raw, 1, (size_t)sz, f) != (size_t)sz) { fclose(f); return 0; }
+    fclose(f);
+    tf->raw[sz] = '\0';
+    tf->rawlen = (size_t)sz;
+
+    /* line ending: first CR or LF decides */
+    p = tf->raw;
+    while (*p && *p != '\r' && *p != '\n') p++;
+    tf->eol_crlf = (*p == '\r');
+
+    /* split a COPY into lines WITHOUT dropping empty ones (strtok collapses
+       consecutive delimiters, which would eat blank lines); tf->raw stays
+       pristine for the byte-identical comparison */
+    {
+        char *copy = (char *)xmalloc((size_t)sz + 1);
+        memcpy(copy, tf->raw, (size_t)sz + 1);
+        char *ln = copy;
+        char *p = copy;
+        while (1) {
+            if (*p == '\n' || *p == '\0') {
+                int last = (*p == '\0');
+                *p = '\0';
+                /* strip one trailing CR (CRLF files) */
+                {
+                    size_t l = strlen(ln);
+                    if (l && ln[l - 1] == '\r') ln[l - 1] = '\0';
+                }
+                /* drop only the synthetic empty line after a final newline;
+                   interior empty (blank) lines are kept */
+                if (!last || ln[0] != '\0') {
+                    if (tf->n == tf->cap) {
+                        tf->cap = tf->cap ? tf->cap * 2 : 128;
+                        tf->text = realloc(tf->text, tf->cap * sizeof(char *));
+                    }
+                    tf->text[tf->n++] = ln;
+                }
+                if (last) break;
+                ln = p + 1;
+            }
+            p++;
+        }
+    }
+    return 1;
+}
+
+/* scan the target file's own lines for .SET/.EQU settings (value spans) */
+static void target_scan(TFile *tf)
+{
+    int i;
+    for (i = 0; i < tf->n; i++) {
+        char *p = tf->text[i];
+        char name[64], dir[16];
+        int k = 0;
+        TSet ts;
+
+        while (*p == ' ' || *p == '\t') p++;
+        if (!isalpha((unsigned char)*p) && *p != '_') continue;
+        while ((isalnum((unsigned char)*p) || *p == '_') && k < 63) name[k++] = *p++;
+        name[k] = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '.') continue;
+        k = 0;
+        while (*p && !isspace((unsigned char)*p) && k < 15) dir[k++] = *p++;
+        dir[k] = '\0';
+        upper(dir);
+        if (strcmp(dir, ".SET") != 0 && strcmp(dir, ".EQU") != 0) continue;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0' || *p == ';') continue;
+
+        memset(&ts, 0, sizeof(ts));
+        ts.idx = i;
+        snprintf(ts.name, sizeof(ts.name), "%s", name);
+        upper(ts.name);
+        ts.vstart = (size_t)(p - tf->text[i]);
+        {
+            int inq = 0;
+            while (*p && (*p != ';' || inq)) { if (*p == '"') inq = !inq; p++; }
+            ts.vend = (size_t)(p - tf->text[i]);
+            while (ts.vend > ts.vstart &&
+                   isspace((unsigned char)tf->text[i][ts.vend - 1])) ts.vend--;
+        }
+        if (tf->nsets == tf->capsets) {
+            tf->capsets = tf->capsets ? tf->capsets * 2 : 32;
+            tf->sets = realloc(tf->sets, tf->capsets * sizeof(TSet));
+        }
+        tf->sets[tf->nsets++] = ts;
+    }
+}
+
+/* pad with tabs (8-wide stops) up to col, or one space if already past */
+static void buf_pad_tab(char *buf, size_t bufsz, int *col, int target)
+{
+    size_t len = strlen(buf);
+    if (*col > target) {
+        if (len + 1 < bufsz) { buf[len] = ' '; buf[len + 1] = '\0'; (*col)++; }
+        return;
+    }
+    while (*col < target) {
+        if (len + 1 >= bufsz) break;
+        buf[len++] = '\t';
+        buf[len] = '\0';
+        *col = (*col & ~7) + 8;
+    }
+}
+
+/* find the master comment for a setting (for appended lines) */
+static const char *master_comment(ParseCtx *ctx, const char *name)
+{
+    int i;
+    for (i = ctx->recs.n - 1; i >= 0; i--)
+        if (ctx->recs.v[i].in_master && strcmp(ctx->recs.v[i].name, name) == 0)
+            return ctx->recs.v[i].comment;
+    return NULL;
+}
+
+static int cmd_write(ParseCtx *ctx, int argc, char **argv, int a0)
+{
+    TFile tf;
+    int i, a, nedit = 0, changed = 0;
+    char *out, *o;
+    const char *eol;
+    size_t outsz;
+    FILE *f;
+    char tmpath[1200];
+
+    if (!target_load(&tf, ctx->target_path)) {
+        fprintf(stderr, "hbconfig: cannot read %s\n", ctx->target_path);
+        return 1;
+    }
+    target_scan(&tf);
+    eol = tf.eol_crlf ? "\r\n" : "\n";
+
+    /* apply each NAME=VALUE edit */
+    for (a = a0; a < argc; a++) {
+        char *eq = strchr(argv[a], '=');
+        char *name, *val;
+        Setting *inh;
+        TSet *last = NULL;
+        int k;
+
+        if (!eq) { fprintf(stderr, "hbconfig: edit '%s' is not NAME=VALUE\n", argv[a]); return 1; }
+        *eq = '\0';
+        name = argv[a]; val = eq + 1;
+        upper(name);
+        check_ascii(name, 0, "argument");
+        check_ascii(val, 0, "argument");
+        if (*name == '\0' || *val == '\0') { fprintf(stderr, "hbconfig: bad edit '%s'\n", argv[a]); return 1; }
+
+        /* the setting must exist somewhere in the cascade */
+        if (!find_setting(&ctx->recs, name, 0)) {
+            fprintf(stderr, "hbconfig: unknown setting '%s'\n", name);
+            return 1;
+        }
+        /* inherited value: cascade without the target's own .SETs */
+        inh = find_setting(&ctx->recs, name, 1);
+
+        /* last own .SET line for this name */
+        for (k = 0; k < tf.nsets; k++)
+            if (strcmp(tf.sets[k].name, name) == 0 && !tf.sets[k].removed)
+                last = &tf.sets[k];
+
+        if (inh && value_eq(inh->value, val)) {
+            /* back to inherited: remove own .SET lines + continuation comments */
+            int removed = 0;
+            for (k = 0; k < tf.nsets; k++) {
+                if (strcmp(tf.sets[k].name, name) == 0 && !tf.sets[k].removed) {
+                    int li = tf.sets[k].idx;
+                    tf.text[li] = NULL;      /* mark removed */
+                    tf.sets[k].removed = 1;
+                    removed++;
+                    /* swallow indented "; ..." continuation lines below */
+                    while (li + 1 < tf.n) {
+                        char *np = tf.text[li + 1];
+                        char *t = np;
+                        if (t[0] == '\0') break;
+                        while (*t == ' ' || *t == '\t') t++;
+                        if (*t != ';' || t == np) break;   /* only INDENTED comments */
+                        tf.text[++li] = NULL;
+                    }
+                }
+            }
+            if (removed) {
+                printf("%s: removed (matches inherited value %s)\n", name, inh->value);
+                changed = 1; nedit++;
+            } else {
+                printf("%s: already inherited, no change\n", name);
+            }
+            continue;
+        }
+
+        if (last) {
+            /* replace value in the last .SET line, keep the rest */
+            char *line = tf.text[last->idx];
+            size_t oldlen = strlen(line);
+            size_t vlen = strlen(val);
+            size_t tail = oldlen - last->vend;
+            char *nl = (char *)xmalloc(oldlen + vlen + 1);
+            memcpy(nl, line, last->vstart);
+            memcpy(nl + last->vstart, val, vlen);
+            memcpy(nl + last->vstart + vlen, line + last->vend, tail + 1);
+            tf.text[last->idx] = nl;
+            printf("%s: %.*s -> %s\n", name,
+                   (int)(last->vend - last->vstart), line + last->vstart, val);
+            changed = 1; nedit++;
+        } else {
+            /* append a new .SET line in the house layout */
+            char buf[2048];
+            int col;
+            const char *mc = master_comment(ctx, name);
+            snprintf(buf, sizeof(buf), "%s", name);
+            col = (int)strlen(buf);
+            buf_pad_tab(buf, sizeof(buf), &col, 16);
+            strncat(buf, ".SET", sizeof(buf) - strlen(buf) - 1); col += 4;
+            buf_pad_tab(buf, sizeof(buf), &col, 24);
+            strncat(buf, val, sizeof(buf) - strlen(buf) - 1); col += (int)strlen(val);
+            if (mc && *mc) {
+                buf_pad_tab(buf, sizeof(buf), &col, 40);
+                strncat(buf, "; ", sizeof(buf) - strlen(buf) - 1);
+                strncat(buf, mc, sizeof(buf) - strlen(buf) - 1);
+            }
+            if (tf.n == tf.cap) {
+                tf.cap = tf.cap ? tf.cap * 2 : 128;
+                tf.text = realloc(tf.text, tf.cap * sizeof(char *));
+            }
+            tf.text[tf.n++] = xstrdup(buf);
+            printf("%s: added = %s\n", name, val);
+            changed = 1; nedit++;
+        }
+    }
+
+    if (!nedit) { printf("; no changes\n"); return 0; }
+    if (!changed) { printf("; no changes\n"); return 0; }
+
+    /* assemble the new content */
+    outsz = 1;
+    for (i = 0; i < tf.n; i++) outsz += tf.text[i] ? strlen(tf.text[i]) + 2 : 2;
+    out = (char *)xmalloc(outsz);
+    o = out;
+    for (i = 0; i < tf.n; i++) {
+        if (!tf.text[i]) continue;              /* removed line */
+        if (tf.text[i][0] == '\0' && !tf.text[i][1]) continue; /* unused */
+        strcpy(o, tf.text[i]); o += strlen(o);
+        strcpy(o, eol); o += strlen(eol);
+    }
+    *o = '\0';
+
+    if (strlen(out) == tf.rawlen && memcmp(out, tf.raw, tf.rawlen) == 0) {
+        printf("; no changes\n");
+        free(out);
+        return 0;
+    }
+
+    snprintf(tmpath, sizeof(tmpath), "%s.hbnew", ctx->target_path);
+    f = fopen(tmpath, "wb");
+    if (!f) { fprintf(stderr, "hbconfig: cannot write %s\n", tmpath); return 1; }
+    if (fwrite(out, 1, (size_t)(o - out), f) != (size_t)(o - out)) { fclose(f); return 1; }
+    fclose(f);
+    remove(ctx->target_path);
+    if (rename(tmpath, ctx->target_path) != 0) {
+        fprintf(stderr, "hbconfig: cannot rename %s to %s\n", tmpath, ctx->target_path);
+        return 1;
+    }
+    printf("; %s updated\n", ctx->target_path);
+    free(out);
+    return 0;
+}
+
+/*==================================================================================================
  * MAIN
  *=================================================================================================*/
 
@@ -709,6 +1024,8 @@ static void usage(void)
         "  hbconfig -show  <platform> <config>\n"
         "  hbconfig -check <config-file>\n"
         "  hbconfig -check <platform> <config>\n"
+        "  hbconfig -write <config-file> NAME=VALUE [NAME=VALUE ...]\n"
+        "  hbconfig -write <platform> <config> NAME=VALUE [NAME=VALUE ...]\n"
         "    (platform/config form locates Config/<platform>_<config>.asm)\n");
     exit(2);
 }
@@ -717,23 +1034,36 @@ int main(int argc, char **argv)
 {
     ParseCtx ctx;
     char path[1024];
-    int check;
+    enum { M_SHOW, M_CHECK, M_WRITE } mode = M_SHOW;
+    int a0 = 3;
 
     memset(&ctx, 0, sizeof(ctx));
 
     if (argc < 3) usage();
-    if (strcmp(argv[1], "-show") == 0) check = 0;
-    else if (strcmp(argv[1], "-check") == 0) check = 1;
+    if (strcmp(argv[1], "-show") == 0) mode = M_SHOW;
+    else if (strcmp(argv[1], "-check") == 0) mode = M_CHECK;
+    else if (strcmp(argv[1], "-write") == 0) mode = M_WRITE;
     else usage();
 
-    if (argc == 3) {
+    /* config-file vs platform+config: a path separator or .asm suffix
+       means a file; otherwise the next arg is the config name */
+    if (strchr(argv[2], '/') || strchr(argv[2], '\\') ||
+        strstr(argv[2], ".asm") || strstr(argv[2], ".ASM")) {
         snprintf(path, sizeof(path), "%s", argv[2]);
-    } else if (argc == 4) {
+    } else {
+        if (argc < 4) usage();
         snprintf(path, sizeof(path), "Config/%s_%s.asm", argv[2], argv[3]);
-    } else usage();
+        a0 = 4;
+    }
 
     ctx.target_path = xstrdup(path);
     parse_file(&ctx, path, 0, 1, 0);
     if (ctx.error) return 1;
-    return check ? cmd_check(&ctx) : cmd_show(&ctx);
+
+    switch (mode) {
+    case M_SHOW:  return cmd_show(&ctx);
+    case M_CHECK: return cmd_check(&ctx);
+    case M_WRITE: return cmd_write(&ctx, argc, argv, a0);
+    }
+    return 2;
 }
