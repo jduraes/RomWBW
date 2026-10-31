@@ -71,6 +71,8 @@ typedef struct {
     int         error;
 } ParseCtx;
 
+static SList *ctx_consts(ParseCtx *ctx) { return &ctx->consts; }
+
 static char *xstrdup(const char *s)
 {
     char *p = malloc(strlen(s) + 1);
@@ -460,12 +462,30 @@ static EVal eval_name(EState *e, const char *tok)
     {
         Setting *s = find_setting(&e->ctx->recs, tok, 0);
         if (!s) {
+            /* std.asm constants are not part of the config cascade; they
+               resolve for tag evaluation (RULES.md allows pick options) */
+            int i;
+            for (i = e->ctx->consts.n - 1; i >= 0; i--)
+                if (strcmp(e->ctx->consts.v[i].name, tok) == 0) { s = &e->ctx->consts.v[i]; break; }
+        }
+        if (!s) {
             if (!e->err[0]) snprintf(e->err, sizeof(e->err), "unknown name '%.200s'", tok);
             v.str = "0"; v.num = 0; v.isnum = 1;
             return v;
         }
         v.str = s->value;
         v.isnum = parse_number(s->value, &v.num);
+        /* a setting whose value IS a constant name (CPUFAM = CPU_Z280)
+           resolves one level through the constant table for comparison */
+        if (!v.isnum && (isalpha((unsigned char)v.str[0]) || v.str[0] == '_')) {
+            int k;
+            for (k = ctx_consts(e->ctx)->n - 1; k >= 0; k--)
+                if (strcmp(ctx_consts(e->ctx)->v[k].name, v.str) == 0) {
+                    v.str = ctx_consts(e->ctx)->v[k].value;
+                    v.isnum = parse_number(v.str, &v.num);
+                    break;
+                }
+        }
         return v;
     }
 }
@@ -1618,6 +1638,24 @@ int main(int argc, char **argv)
 
     ctx.target_path = xstrdup(path);
     parse_file(&ctx, path, 0, 1, 0);
+    /* std.asm is not #included by the config chain, but its constants
+       define the pick lists and resolve tag names (RULES.md section 2) */
+    if (ctx.master_path[0]) {
+        char stdpath[1200];
+        const char *slash = strrchr(ctx.master_path, '/');
+#ifdef _WIN32
+        { const char *bs = strrchr(ctx.master_path, '\\');
+          if (bs && (!slash || bs > slash)) slash = bs; }
+#endif
+        if (slash) {
+            ParseCtx cctx;
+            memset(&cctx, 0, sizeof(cctx));
+            snprintf(stdpath, sizeof(stdpath), "%.*s/std.asm",
+                     (int)(slash - ctx.master_path), ctx.master_path);
+            parse_file(&cctx, stdpath, 0, 0, 0);
+            ctx.consts = cctx.recs;
+        }
+    }
     if (ctx.error) return 1;
 
     switch (mode) {
