@@ -35,6 +35,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <dirent.h>
 
 #define MAXTOK   256
 
@@ -86,6 +87,13 @@ static void *xmalloc(size_t n)
     void *p = malloc(n);
     if (!p) die("out of memory");
     return p;
+}
+
+static void *xrealloc(void *p, size_t n)
+{
+    void *q = realloc(p, n);
+    if (!q) die("out of memory");
+    return q;
 }
 
 static void slist_push(SList *sl, Setting s)
@@ -1423,6 +1431,186 @@ static void ui_help(Item *it)
     con_getkey();
 }
 
+/* ------------------------------------------------------------------ */
+/* interactive config picker (plain "-menu" with no config args)      */
+/* ------------------------------------------------------------------ */
+
+typedef struct { char plat[64]; char conf[160]; } CfgSel;
+
+static int cmp_cfg(const void *a, const void *b)
+{
+    const CfgSel *x = (const CfgSel *)a, *y = (const CfgSel *)b;
+    int rc = strcmp(x->plat, y->plat);
+    return rc ? rc : strcmp(x->conf, y->conf);
+}
+
+/* scan Config/ for <plat>_<conf>.asm files; returns malloc'd sorted
+   array (caller frees) or NULL with *n_out = 0 if Config/ is missing */
+static CfgSel *scan_configs(int *n_out)
+{
+    DIR *d = opendir("Config");
+    CfgSel *list = NULL;
+    int n = 0, cap = 0;
+    struct dirent *e;
+
+    *n_out = 0;
+    if (!d) return NULL;
+    while ((e = readdir(d)) != NULL) {
+        const char *nm = e->d_name;
+        size_t len = strlen(nm);
+        const char *us;
+        if (len < 5 || len >= sizeof(((CfgSel *)0)->plat) + sizeof(((CfgSel *)0)->conf))
+            continue;
+        if (strcmp(nm + len - 4, ".asm") != 0 && strcmp(nm + len - 4, ".ASM") != 0)
+            continue;
+        if (strncmp(nm, "cfg_", 4) == 0 || strncmp(nm, "CFG_", 4) == 0)
+            continue;  /* cfg_MASTER.asm / cfg_<plat>.asm are includes, not configs */
+        us = strchr(nm, '_');
+        if (!us || us == nm || us == nm + len - 5) continue;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 32;
+            list = (CfgSel *)xrealloc(list, sizeof(CfgSel) * (size_t)cap);
+        }
+        snprintf(list[n].plat, sizeof(list[n].plat), "%.*s", (int)(us - nm), nm);
+        snprintf(list[n].conf, sizeof(list[n].conf), "%.*s",
+                 (int)(len - 4 - (us - nm) - 1), us + 1);
+        n++;
+    }
+    closedir(d);
+    qsort(list, (size_t)n, sizeof(CfgSel), cmp_cfg);
+    *n_out = n;
+    return list;
+}
+
+/* generic scrolling single-column picker; returns index or -1 (abort) */
+static int ui_pick(const char *title, const char *const *rows, int n, int allow_back)
+{
+    int sel = 0, top = 0, rows_vis = 30;
+    for (;;) {
+        int i, r = 4;
+        printf(ESC "[H" ESC "[2K");
+        printf("hbconfig - select %s   keys: up/dn=move enter=select %sq=quit\n\n",
+               title, allow_back ? "esc=back " : "");
+        if (top > 0) { printf(ESC "[%d;1H   ...", r++); }
+        for (i = top; i < n && i < top + rows_vis; i++) {
+            printf(ESC "[%d;1H" ESC "[2K", r);
+            if (i == sel) fputs(ESC "[7m", stdout);
+            printf("   %s", rows[i]);
+            if (i == sel) fputs(ESC "[0m", stdout);
+            r++;
+        }
+        if (top + rows_vis < n) printf(ESC "[%d;1H   ... (%d more)", r, n - top - rows_vis);
+        fflush(stdout);
+
+        {
+            int c = con_getkey();
+            if (c == 'q' || c == 'Q') return -1;
+            if (c == '\r' || c == '\n' || c == ' ') return sel;
+            if (c == 27) {
+#ifdef _WIN32
+                return allow_back ? -2 : -1;   /* lone Esc */
+#else
+                int c2 = con_getkey();
+                if (c2 != '[') return allow_back ? -2 : -1;
+                c2 = con_getkey();
+                if (c2 == 'A') { if (sel > 0) sel--; }
+                else if (c2 == 'B') { if (sel < n - 1) sel++; }
+                else if (c2 == 'I') sel = sel > rows_vis ? sel - rows_vis : 0;
+                else if (c2 == 'V' || c2 == '6') sel = sel + rows_vis < n ? sel + rows_vis : n - 1;
+                else if (c2 == 27) return allow_back ? -2 : -1;
+#endif
+            }
+#ifdef _WIN32
+            else if (c == 0 || c == 224) {
+                int k2 = con_getkey();
+                if (k2 == 72) { if (sel > 0) sel--; }              /* up */
+                else if (k2 == 80) { if (sel < n - 1) sel++; }     /* down */
+                else if (k2 == 73) sel = sel > rows_vis ? sel - rows_vis : 0;          /* pgup */
+                else if (k2 == 81) sel = sel + rows_vis < n ? sel + rows_vis : n - 1;  /* pgdn */
+                else if (k2 == 27 && allow_back) return -2;        /* Esc under win con */
+            }
+#endif
+        }
+        if (sel < top) top = sel;
+        if (sel >= top + rows_vis) top = sel - rows_vis + 1;
+    }
+}
+
+/* plain "-menu": pick platform then config; writes Config/<p>_<c>.asm
+   into out_path.  pre_plat (may be NULL) skips the platform step.
+   returns 0 on a selection, 1 on abort/none-found. */
+static int picker_choose(char *out_path, size_t outsz, const char *pre_plat)
+{
+    CfgSel *cfgs;
+    char (*plats)[64];
+    int n = 0, np = 0, i;
+    const char **rows;
+    char plat[64] = "";
+
+    cfgs = scan_configs(&n);
+    if (!cfgs || n == 0) {
+        fprintf(stderr, "hbconfig: no Config/*_*.asm found (run from Source/HBIOS)\n");
+        free(cfgs);
+        return 1;
+    }
+    plats = (char (*)[64])xmalloc(sizeof(*plats) * (size_t)n);
+    for (i = 0; i < n; i++)
+        if (np == 0 || strcmp(plats[np - 1], cfgs[i].plat) != 0)
+            snprintf(plats[np++], 64, "%s", cfgs[i].plat);
+    if (pre_plat) {
+        for (i = 0; i < np; i++)
+            if (strcmp(plats[i], pre_plat) == 0) { snprintf(plat, sizeof(plat), "%s", pre_plat); break; }
+        if (!plat[0]) fprintf(stderr, "hbconfig: platform '%s' not found; pick one\n", pre_plat);
+    }
+
+    rows = (const char **)xmalloc(sizeof(char *) * (size_t)(n + 1));
+
+    if (!plat[0]) {
+        int p;
+        for (i = 0; i < np; i++) rows[i] = plats[i];
+        p = ui_pick("platform", rows, np, 0);
+        if (p < 0) { free(rows); free(plats); free(cfgs); return 1; }
+        snprintf(plat, sizeof(plat), "%s", plats[p]);
+    }
+
+    for (;;) {
+        int m = 0, c;
+        for (i = 0; i < n; i++)
+            if (strcmp(cfgs[i].plat, plat) == 0) rows[m++] = cfgs[i].conf;
+        c = ui_pick("configuration", rows, m, pre_plat ? 0 : 1);
+        if (c == -2) {          /* esc: back to platform list */
+            int p;
+            for (i = 0; i < np; i++) rows[i] = plats[i];
+            p = ui_pick("platform", rows, np, 0);
+            if (p < 0) { free(rows); free(plats); free(cfgs); return 1; }
+            snprintf(plat, sizeof(plat), "%s", plats[p]);
+            continue;
+        }
+        if (c < 0) { free(rows); free(plats); free(cfgs); return 1; }
+        snprintf(out_path, outsz, "Config/%s_%s.asm", plat, rows[c]);
+        break;
+    }
+    free(rows); free(plats); free(cfgs);
+    return 0;
+}
+
+/* non-interactive listing of what the picker would offer (tests, scripts) */
+static int list_configs(void)
+{
+    CfgSel *cfgs;
+    int n = 0, i, rc = 0;
+    cfgs = scan_configs(&n);
+    if (!cfgs || n == 0) {
+        fprintf(stderr, "hbconfig: no Config/*_*.asm found (run from Source/HBIOS)\n");
+        free(cfgs);
+        return 1;
+    }
+    for (i = 0; i < n; i++)
+        printf("%s %s\n", cfgs[i].plat, cfgs[i].conf);
+    free(cfgs);
+    return rc;
+}
+
 static void item_edit(Item *it)
 {
     char buf[128];
@@ -1605,7 +1793,11 @@ static void usage(void)
         "  hbconfig -check <platform> <config>\n"
         "  hbconfig -write <config-file> NAME=VALUE [NAME=VALUE ...]\n"
         "  hbconfig -write <platform> <config> NAME=VALUE [NAME=VALUE ...]\n"
-        "    (platform/config form locates Config/<platform>_<config>.asm)\n");
+        "    (platform/config form locates Config/<platform>_<config>.asm)\n"
+        "  hbconfig -menu                        - pick platform/config, then edit\n"
+        "  hbconfig -menu  <platform>            - pick a config of <platform>, then edit\n"
+        "  hbconfig -menu  <platform> <config>   - edit Config/<platform>_<config>.asm\n"
+        "  hbconfig -menu  <config-file>         - edit a config file directly\n");
     exit(2);
 }
 
@@ -1618,22 +1810,47 @@ int main(int argc, char **argv)
 
     memset(&ctx, 0, sizeof(ctx));
 
-    if (argc < 3) usage();
+    if (argc < 2) usage();
     if (strcmp(argv[1], "-show") == 0) mode = M_SHOW;
     else if (strcmp(argv[1], "-check") == 0) mode = M_CHECK;
     else if (strcmp(argv[1], "-write") == 0) mode = M_WRITE;
     else if (strcmp(argv[1], "-menu") == 0) mode = M_MENU;
+    else if (strcmp(argv[1], "-listcfgs") == 0) return list_configs();
     else usage();
 
-    /* config-file vs platform+config: a path separator or .asm suffix
-       means a file; otherwise the next arg is the config name */
-    if (strchr(argv[2], '/') || strchr(argv[2], '\\') ||
-        strstr(argv[2], ".asm") || strstr(argv[2], ".ASM")) {
-        snprintf(path, sizeof(path), "%s", argv[2]);
+#ifndef _WIN32
+    atexit(con_done);
+#endif
+    /* plain "-menu" (or "-menu <platform>") opens the config picker */
+    if (mode == M_MENU && (argc == 2 ||
+        (argc == 3 && !strchr(argv[2], '/') && !strchr(argv[2], '\\') &&
+         !strstr(argv[2], ".asm") && !strstr(argv[2], ".ASM")))) {
+        con_init();
+        ui_clear();
+        if (picker_choose(path, sizeof(path), argc == 3 ? argv[2] : NULL)) {
+#ifndef _WIN32
+            con_done();
+#endif
+            ui_clear();
+            return 1;
+        }
+#ifndef _WIN32
+        con_done();
+#endif
+        ui_clear();
+        fprintf(stderr, "; hbconfig: editing %s\n", path);
     } else {
-        if (argc < 4) usage();
-        snprintf(path, sizeof(path), "Config/%s_%s.asm", argv[2], argv[3]);
-        a0 = 4;
+        if (argc < 3) usage();
+        /* config-file vs platform+config: a path separator or .asm suffix
+           means a file; otherwise the next arg is the config name */
+        if (strchr(argv[2], '/') || strchr(argv[2], '\\') ||
+            strstr(argv[2], ".asm") || strstr(argv[2], ".ASM")) {
+            snprintf(path, sizeof(path), "%s", argv[2]);
+        } else {
+            if (argc < 4) usage();
+            snprintf(path, sizeof(path), "Config/%s_%s.asm", argv[2], argv[3]);
+            a0 = 4;
+        }
     }
 
     ctx.target_path = xstrdup(path);

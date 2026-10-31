@@ -18,10 +18,13 @@ Hand-edited configs keep working exactly as before.
 Run from the `Source/HBIOS` directory (or pass a full path):
 
 ```
-hbconfig -menu  SCZ180 sc126_std       ; interactive menuconfig-style editor
+hbconfig -menu                          ; pick platform + config, then edit
+hbconfig -menu  SCZ180                  ; pick a config of SCZ180, then edit
+hbconfig -menu  SCZ180 sc126_std        ; edit that config directly
 hbconfig -show  Config/SCZ180_sc126_std.asm
 hbconfig -check Config/SCZ180_sc126_std.asm
 hbconfig -write Config/SCZ180_sc126_std.asm CTCENABLE=TRUE UARTCNT=2
+hbconfig -listcfgs                      ; plain list of "platform config" pairs
 ```
 
 - `-show` prints every setting differing from `cfg_MASTER.asm`, with the

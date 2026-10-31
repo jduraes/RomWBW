@@ -18,4 +18,14 @@ for cfg in "$HBIOS"/Config/*.asm "$HBIOS"/Config/*.ASM; do
     fi
 done
 echo "parsed $count configs, fail=$fail"
+
+# picker source list: every Config/*.asm except cfg_*.asm must appear as
+# "<plat> <conf>", sorted, with no cfg_ leakage
+cd "$HBIOS"
+n_list=$(../../Tools/hbconfig/hbconfig.exe -listcfgs | wc -l)
+n_cfg=$(ls Config/*.asm Config/*.ASM 2>/dev/null | grep -vc '/cfg_')
+../../Tools/hbconfig/hbconfig.exe -listcfgs | grep -i '^cfg_' && { echo "FAIL: cfg_ leaked into -listcfgs"; fail=1; }
+[ "$n_list" = "$n_cfg" ] || { echo "FAIL: -listcfgs count $n_list != config files $n_cfg"; fail=1; }
+../../Tools/hbconfig/hbconfig.exe -listcfgs | grep -q '^SCZ180 sc126_std$' || { echo "FAIL: SCZ180 sc126_std missing"; fail=1; }
+echo "listcfgs $n_list entries, fail=$fail"
 exit $fail
