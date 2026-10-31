@@ -1,6 +1,6 @@
 # RomWBW HBIOS config tool (hbconfig) - single-file C tool.
 
-CC      ?= gcc
+CC       = gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=c11
 TARGET   = hbconfig
 
